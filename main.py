@@ -190,33 +190,37 @@ def main():
     sid = None
 
     try:
-        # ---------- 1. 访问主页 (🌟 引入智能刷新机制) ----------
+        # ---------- 1. 访问主页 (🌟 原生 F5 刷新机制) ----------
         print(f"[INFO] 🌐 访问主页: {BASE_URL}/dashboard")
         
-        # 设定最多允许尝试访问网页的次数，防止陷入死循环
-        max_retries = 3
-        
-        # 使用 for 循环来进行重试机制
-        for attempt in range(max_retries):
+        # 第一次访问
+        try:
             driver.get(f"{BASE_URL}/dashboard")
-            time.sleep(4) # 给浏览器加载页面的时间
+        except:
+            pass # 忽略底层的网络报错，交给后面的逻辑用肉眼判断
             
+        time.sleep(4) # 给第一次加载一点反应时间
+        
+        max_retries = 3
+        for attempt in range(max_retries):
             # 获取当前页面的全部 HTML 代码
             page_text = driver.get_page_source()
             
-            # 检查 HTML 代码中是否包含网络重置的错误提示
-            if "ERR_CONNECTION_RESET" in page_text or "This site can" in page_text:
-                print(f"[WARN] ⚠️ 页面连接被重置 (尝试 {attempt + 1}/{max_retries})，正在尝试刷新...")
-                time.sleep(2) # 遇到错误后，暂停2秒再进行下一次循环（相当于刷新）
+            # 检查是否遇到了断网的恐龙页面
+            if "ERR_CONNECTION_RESET" in page_text or "This site can" in page_text or "ERR_" in page_text:
+                print(f"[WARN] ⚠️ 连接失败 (尝试 {attempt + 1}/{max_retries})，正在按 F5 强制刷新...")
+                time.sleep(3) # 遇到错误后，多等3秒，让代理隧道重新建立
+                
+                # 🌟 关键修改：模拟人类按下 F5 刷新键
+                driver.refresh() 
+                time.sleep(5) # 刷新后等待页面重新渲染
             else:
-                # 如果没有发现错误关键词，说明网页加载成功，跳出这个重试循环
                 print("[INFO] ✅ 页面加载成功！没有遇到连接重置。")
                 break 
         else:
-            # 🚨 Python 特有的 for...else 语法：如果上面的循环是因为达到了 max_retries 次数而结束（而不是被 break 跳出），就会执行这里的代码。
-            print("[ERROR] ❌ 连续 3 次连接被重置，网页彻底打不开。")
+            print("[ERROR] ❌ 连续 3 次按 F5 刷新依然失败，网页彻底打不开。")
             take_screenshot(driver, "ERROR-connection-fatal")
-            raise Exception("网络代理不稳定，连续加载失败，请更换代理节点。")
+            raise Exception("网络代理不稳定，连续刷新均失败，请检查或更换代理节点。")
             
         take_screenshot(driver, "01-initial")
 
