@@ -1,7 +1,8 @@
 # HidenCloud 自动续期
 
+
 > ⭐ 觉得有用？给个 Star 支持一下！  
-> 官网：[https://hidencloud.com](https://hidencloud.com) ｜ 控制台：[https://dash.hidencloud.com](https://dash.hidencloud.com)
+> 官网：[https://hidencloud.com](https://hidencloud.com) ｜ 控制台：[https://dash.hidencloud.com](https://dash.hidencloud.com) ｜ 实时库存监控频道 [oyz8_bot](https://t.me/oyz8_bot)
 
 自动续期 [HidenCloud](https://hidencloud.com) 免费 VPS 服务器，防止到期被删除。
 
