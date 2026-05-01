@@ -359,15 +359,15 @@ jobs:
           python3 main.py 2>&1 | tee renew.log
 
      # 如需上传日志截图，可取消注释以下步骤
-     # - name: 上传日志和截图
-     #   if: always()
-     #   uses: actions/upload-artifact@v4
-     #   with:
-     #     name: hidencloud-logs
-     #     path: |
-     #       screenshots/*.png
-     #       renew.log
-     #     retention-days: 3
+      - name: 上传日志和截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidencloud-logs
+          path: |
+            screenshots/*.png
+            renew.log
+          retention-days: 3
 
       - name: 删除旧浏览器状态缓存
         if: always()
