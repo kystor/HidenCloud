@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-HidenCloud 自动续期脚本（SeleniumBase 兼容增强版）
+HidenCloud 自动续期脚本（SeleniumBase）
 
-改动重点：
-1. 去掉 headless2，避免 UC 模式在 Linux / GitHub Actions 下的关闭窗口超时问题
-2. 优先使用 xvfb（适合 Linux / GitHub Actions）
-3. 增加打开页面失败后的重试与回退逻辑
-4. 统一封装常用操作，尽量降低 SeleniumBase / Selenium 的接口差异风险
+本版修改原则：
+1. 不改变 CF 验证相关逻辑
+2. 仅修复 GitHub Actions / Linux 下浏览器关闭超时、窗口关闭失败的问题
+3. 保留 user_data_dir，尽量不破坏你原有的登录态与站点行为
 """
 
 import os
@@ -22,7 +21,7 @@ from selenium.webdriver.common.by import By
 
 
 # =========================================================
-# 配置区域
+# 配置区
 # =========================================================
 HIDENCLOUD = os.getenv("HIDENCLOUD", "")
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
@@ -37,7 +36,6 @@ USER_DATA_DIR = os.path.abspath(os.path.join(STATE_DIR, "selenium_profile"))
 os.makedirs(STATE_DIR, exist_ok=True)
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-# 账号格式：email-----password
 if "-----" in HIDENCLOUD:
     HIDEN_EMAIL, HIDEN_PWD = HIDENCLOUD.split("-----", 1)
 else:
@@ -45,11 +43,19 @@ else:
 
 
 # =========================================================
-# 工具函数
+# 通用工具函数
 # =========================================================
 def get_bj_time():
-    """返回北京时间字符串"""
+    """获取北京时间字符串"""
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def mask_email(email):
+    """邮箱脱敏显示"""
+    if "@" in email:
+        local, domain = email.split("@", 1)
+        return f"{local[:3]}***@{domain}"
+    return f"{email[:3]}***"
 
 
 def send_tg_notification(message, photo_path=None):
@@ -96,11 +102,10 @@ def take_screenshot(driver, name):
 
 
 def parse_due_date(text):
-    """将页面显示的日期字符串转换为 YYYY-MM-DD 格式"""
+    """把页面显示的到期时间转成 YYYY-MM-DD"""
     if not text:
         return None
 
-    # 例如：28 Apr 2026
     match = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})", text)
     if match:
         day, month_str, year = match.groups()
@@ -110,7 +115,6 @@ def parse_due_date(text):
         except Exception:
             pass
 
-    # 已经是标准格式
     if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
         return text
 
@@ -146,29 +150,8 @@ def wait_for_element_visible(driver, by, value, timeout=30, interval=0.5):
     return None
 
 
-def wait_for_turnstile_token(driver, timeout=90):
-    """等待 Cloudflare Turnstile token 生成"""
-    print("[INFO] ⏳ 等待 Turnstile 验证通过...")
-    start = time.time()
-
-    while time.time() - start < timeout:
-        try:
-            token = driver.execute_script(
-                'return document.querySelector("[name=cf-turnstile-response]")?.value || "";'
-            )
-            if token and len(token) > 20:
-                print("[INFO] ✅ Turnstile token 已生成")
-                return True
-        except Exception:
-            pass
-
-        time.sleep(1)
-
-    return False
-
-
 def wait_for_url_contains(driver, keyword, timeout=45):
-    """等待当前 URL 包含特定关键字"""
+    """等待当前 URL 包含关键字"""
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -181,7 +164,7 @@ def wait_for_url_contains(driver, keyword, timeout=45):
 
 
 def check_login_error(driver):
-    """检查页面是否有登录错误信息"""
+    """检查登录页是否有错误提示"""
     error_selectors = [
         (By.CSS_SELECTOR, ".text-red-500"),
         (By.CSS_SELECTOR, ".alert-danger"),
@@ -201,16 +184,8 @@ def check_login_error(driver):
     return None
 
 
-def mask_email(email):
-    """邮箱脱敏显示"""
-    if "@" in email:
-        local, domain = email.split("@", 1)
-        return f"{local[:3]}***@{domain}"
-    return f"{email[:3]}***"
-
-
 def get_current_due_date(driver):
-    """获取当前管理页面的到期时间，返回原始字符串和标准化日期"""
+    """获取管理页的当前到期时间"""
     try:
         due_elem = driver.find_element(
             By.XPATH, "//h6[contains(text(),'Due date')]/following-sibling::div"
@@ -223,7 +198,7 @@ def get_current_due_date(driver):
 
 
 def safe_quit(driver):
-    """尽量稳妥地关闭浏览器，避免 finally 里再炸一次"""
+    """尽量稳妥退出，避免 close/quit 失败把流程二次打断"""
     if not driver:
         return
 
@@ -242,8 +217,9 @@ def safe_quit(driver):
 
 def open_url_safely(driver, url):
     """
-    先尝试 UC 专用打开方式，失败后回退到普通 get。
-    这样可以降低 UC + GitHub Actions 环境里窗口关闭超时的概率。
+    保持你原来的 CF 访问方式：
+    1. 先尝试 uc_open_with_reconnect
+    2. 失败再回退到 driver.get
     """
     try:
         if hasattr(driver, "uc_open_with_reconnect"):
@@ -251,16 +227,25 @@ def open_url_safely(driver, url):
                 driver.uc_open_with_reconnect(url, 12)
                 return
             except Exception as e:
-                print(f"[WARN] uc_open_with_reconnect 失败，改用 driver.get(): {e}")
+                print(f"[WARN] uc_open_with_reconnect 失败，回退 driver.get(): {e}")
 
         driver.get(url)
     except Exception:
-        # 把异常继续抛给外层，让外层决定是否换一套浏览器参数重试
         raise
 
 
+# =========================================================
+# 浏览器启动
+# =========================================================
 def build_driver(headless=False, xvfb=True):
-    """构建浏览器驱动"""
+    """
+    构建浏览器驱动
+
+    关键点：
+    - 保留 uc=True，保证你原本的 CF 行为不变
+    - 不使用 headless2，避免 Linux / GitHub Actions 下关闭窗口超时
+    - 优先 xvfb=True，适合 GitHub Actions
+    """
     driver_kwargs = {
         "uc": True,
         "headless": headless,
@@ -275,9 +260,6 @@ def build_driver(headless=False, xvfb=True):
         ),
     }
 
-    # 先不要再使用 headless2，UC 模式下这类组合在 Linux/CI 环境更容易出问题
-    # driver_kwargs["headless2"] = True
-
     if PROXY_SERVER:
         driver_kwargs["proxy"] = PROXY_SERVER
         print(f"[INFO] 使用代理: {PROXY_SERVER}")
@@ -290,8 +272,11 @@ def build_driver(headless=False, xvfb=True):
 
 def start_driver_with_fallback():
     """
-    优先使用 xvfb + 非 headless 模式；
-    如果失败，再回退到 headless 模式尝试一次。
+    优先尝试：
+    1. 非 headless + xvfb
+    2. headless + 非 xvfb
+
+    这样尽量不动 CF 逻辑，只解决 GitHub Actions 里窗口关闭/卡住问题。
     """
     configs = [
         {"headless": False, "xvfb": True},
@@ -309,13 +294,13 @@ def start_driver_with_fallback():
             )
             driver = build_driver(headless=cfg["headless"], xvfb=cfg["xvfb"])
 
-            # 先打开一个页面验证浏览器可用性
+            # 先试着打开一次主页，确认浏览器稳定可用
             open_url_safely(driver, f"{BASE_URL}/dashboard")
             time.sleep(3)
             return driver
         except Exception as e:
             last_error = e
-            print(f"[WARN] 第 {idx} 套浏览器参数启动失败: {e}")
+            print(f"[WARN] 第 {idx} 套参数启动失败: {e}")
             safe_quit(driver)
             time.sleep(2)
 
@@ -350,7 +335,7 @@ def main():
 
     try:
         # -------------------------------------------------
-        # 1) 启动浏览器（带回退）
+        # 1. 启动浏览器
         # -------------------------------------------------
         driver = start_driver_with_fallback()
         print("[INFO] 浏览器已启动，开始执行流程")
@@ -358,7 +343,7 @@ def main():
         take_screenshot(driver, "01-initial")
 
         # -------------------------------------------------
-        # 2) 登录判断
+        # 2. 登录判断
         # -------------------------------------------------
         need_login = False
         try:
@@ -395,24 +380,38 @@ def main():
 
             take_screenshot(driver, "03-credentials-filled")
 
+            # =========================================================
+            # CF 验证逻辑：保持原样，不改核心流程
+            # =========================================================
             print("[INFO] ⏳ 等待 Turnstile 加载...")
             time.sleep(5)
 
-            # 如果页面上有 turnstile，就尝试点击/触发
             try:
                 if driver.find_elements(By.CSS_SELECTOR, ".cf-turnstile"):
                     print("[INFO] 尝试处理 Turnstile...")
                     try:
-                        # SeleniumBase 的 UC 辅助点击
                         driver.uc_gui_click_cf(".cf-turnstile")
                     except Exception:
-                        # 退回普通点击
                         turnstile = driver.find_element(By.CSS_SELECTOR, ".cf-turnstile")
                         turnstile.click()
 
                     take_screenshot(driver, "04-turnstile-clicked")
 
-                    if not wait_for_turnstile_token(driver, timeout=90):
+                    token_ok = False
+                    start = time.time()
+                    while time.time() - start < 90:
+                        try:
+                            token = driver.execute_script(
+                                'return document.querySelector("[name=cf-turnstile-response]")?.value || "";'
+                            )
+                            if token and len(token) > 20:
+                                token_ok = True
+                                break
+                        except Exception:
+                            pass
+                        time.sleep(1)
+
+                    if not token_ok:
                         take_screenshot(driver, "ERROR-turnstile-timeout")
                         raise Exception("Turnstile 验证超时")
 
@@ -460,7 +459,7 @@ def main():
             take_screenshot(driver, "02-already-logged-in")
 
         # -------------------------------------------------
-        # 3) 提取服务器 ID
+        # 3. 提取服务器 ID
         # -------------------------------------------------
         print("[INFO] 提取服务器 ID...")
         take_screenshot(driver, "08-dashboard")
@@ -485,19 +484,19 @@ def main():
             raise Exception("无法提取服务器 ID")
 
         manage_url = f"{BASE_URL}/service/{sid}/manage"
-        print(f"[INFO] 访问管理页面: {BASE_URL}/service/{sid}/manage")
+        print(f"[INFO] 访问管理页面: {manage_url}")
         open_url_safely(driver, manage_url)
         time.sleep(3)
         take_screenshot(driver, "09-manage-page")
 
         # -------------------------------------------------
-        # 4) 获取续订前到期时间
+        # 4. 获取续订前到期时间
         # -------------------------------------------------
         due_date_before_raw, due_date_before_std = get_current_due_date(driver)
         print(f"[INFO] 续订前到期时间: {due_date_before_raw}")
 
         # -------------------------------------------------
-        # 5) 续期操作
+        # 5. 续期操作
         # -------------------------------------------------
         try:
             print("[INFO] 查找并点击 Renew 按钮...")
@@ -519,7 +518,8 @@ def main():
             print(f"[INFO] Renew 按钮 onclick: {onclick_val}")
 
             param_match = re.search(
-                r"showRenewAlert\((\d+),\s*(\d+),\s*(true|false)\)", onclick_val
+                r"showRenewAlert\((\d+),\s*(\d+),\s*(true|false)\)",
+                onclick_val
             )
             if param_match:
                 days_left = int(param_match.group(1))
@@ -537,7 +537,7 @@ def main():
             take_screenshot(driver, "10-renew-clicked")
 
             # -------------------------------------------------
-            # 检测限制弹窗
+            # 6. 检测限制弹窗
             # -------------------------------------------------
             time.sleep(1)
             restriction_h3 = ""
@@ -619,7 +619,6 @@ def main():
                 time.sleep(5)
                 take_screenshot(driver, "13-invoice-page")
 
-                # 滚动到底部
                 try:
                     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                     time.sleep(1)
@@ -660,7 +659,7 @@ def main():
             raise
 
         # -------------------------------------------------
-        # 6) 获取续订后到期时间
+        # 7. 获取续订后到期时间
         # -------------------------------------------------
         open_url_safely(driver, manage_url)
         time.sleep(3)
@@ -676,7 +675,7 @@ def main():
             print(f"[INFO] 到期时间(标准): {due_date_after_raw}")
 
         # -------------------------------------------------
-        # 7) 判断结果状态
+        # 8. 判断结果
         # -------------------------------------------------
         if restricted and not renew_executed:
             result_status = "ℹ️ 暂无可续期"
@@ -693,7 +692,7 @@ def main():
             result_status = "❌ 续订失败"
 
         # -------------------------------------------------
-        # 8) 发送 TG 通知
+        # 9. 发送通知
         # -------------------------------------------------
         bj_time = get_bj_time()
 
