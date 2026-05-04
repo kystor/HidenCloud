@@ -31,18 +31,11 @@ BASE_URL = "https://dash.hidencloud.com"
 # 准备工作：设置截图保存的文件夹
 # =========================================================
 SCREENSHOT_DIR = "screenshots"
-# 如果文件夹不存在，就自动创建一个
 if not os.path.exists(SCREENSHOT_DIR):
     os.makedirs(SCREENSHOT_DIR)
 
 def take_screenshot(driver, account_index, step_name):
-    """
-    辅助函数：给当前网页拍照并保存
-    参数说明：
-    - account_index: 当前是第几个账号（用于文件名前缀排版）
-    - step_name: 这一步做了什么（用于文件名后缀说明）
-    """
-    # 拼接出像 "acc1_01_访问初始页.png" 这样的文件名
+    """辅助函数：给当前网页拍照并保存"""
     file_path = os.path.join(SCREENSHOT_DIR, f"acc{account_index}_{step_name}.png")
     try:
         driver.save_screenshot(file_path)
@@ -55,7 +48,6 @@ def take_screenshot(driver, account_index, step_name):
 # 处理 Cloudflare 整页 5 秒盾
 # =========================================================
 def is_cloudflare_interstitial(driver) -> bool:
-    """检查当前页面是否是 Cloudflare 的 5 秒盾等待页"""
     try:
         page_source = driver.get_page_source()
         title = driver.get_title().lower() if driver.get_title() else ""
@@ -74,7 +66,6 @@ def is_cloudflare_interstitial(driver) -> bool:
         return False
 
 def bypass_cloudflare_interstitial(driver, account_index, max_attempts=3) -> bool:
-    """尝试绕过 Cloudflare 的整页盾，并加入截图反馈"""
     print("    🛡️ 检测到 CF 5秒盾，准备破除...")
     take_screenshot(driver, account_index, "02_发现CF5秒盾拦截")
     
@@ -83,8 +74,6 @@ def bypass_cloudflare_interstitial(driver, account_index, max_attempts=3) -> boo
         try:
             driver.uc_gui_click_captcha()
             time.sleep(6)
-            
-            # 每次尝试后截图看看结果
             take_screenshot(driver, account_index, f"02-1_CF盾绕过尝试{attempt+1}")
             
             if not is_cloudflare_interstitial(driver):
@@ -102,7 +91,6 @@ def bypass_cloudflare_interstitial(driver, account_index, max_attempts=3) -> boo
 # 处理 Turnstile 组件（打勾验证码）
 # =========================================================
 def handle_turnstile_verification(driver, account_index) -> bool:
-    """综合处理登录页和弹窗中的 CF Turnstile 验证码，加入截图"""
     try:
         cookie_btn = 'button[data-cky-tag="accept-button"]'
         if driver.is_element_visible(cookie_btn):
@@ -183,7 +171,6 @@ def handle_turnstile_verification(driver, account_index) -> bool:
 # 工具函数
 # =========================================================
 def parse_due_date(text):
-    """将网页上抓到的日期转换为标准格式 YYYY-MM-DD"""
     if not text: return None
     match = re.search(r'(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})', text)
     if match:
@@ -199,13 +186,9 @@ def parse_due_date(text):
 # 单账号核心处理流程
 # =========================================================
 def process_single_account(driver, email, pwd, account_index):
-    """
-    在这里，我们将序号 account_index 一直传下去，保证截图的文件名是对的
-    """
     try:
         print(f"\n[INFO] >>> 开始处理账号: {email} <<<")
         
-        # --- 步骤 1：访问主页 ---
         target_url = f"{BASE_URL}/dashboard"
         print(f"[INFO] 🌐 正在使用智能重连模式访问: {target_url}")
         
@@ -217,31 +200,32 @@ def process_single_account(driver, email, pwd, account_index):
         time.sleep(4)
         take_screenshot(driver, account_index, "01_访问后台主页")
         
-        # 检查是否有 5 秒盾
         if is_cloudflare_interstitial(driver):
             if not bypass_cloudflare_interstitial(driver, account_index):
                 print(f"[ERROR] 无法绕过 CF 整页拦截，跳过此账号。")
                 return None
             time.sleep(3)
         
-        # --- 步骤 2：填写表单 ---
         print("[INFO] 填写账号与密码...")
         driver.type("input#username", email)
         driver.type("input#password", pwd)
         time.sleep(2)
         take_screenshot(driver, account_index, "03_账号密码已填写")
         
-        # 处理登录框下方的 Turnstile 验证码
         print("[INFO] 检测并处理登录安全验证...")
-        handle_turnstile_verification(driver, account_index)
+        # 【修改点 2】这里加了一把安全锁！如果不等于 True（验证失败），直接终止这个账号的操作！
+        is_verified = handle_turnstile_verification(driver, account_index)
+        if not is_verified:
+            print("[ERROR] ❌ 验证未通过，为了安全放弃提交登录表单！")
+            take_screenshot(driver, account_index, "04-3_中止提交表单")
+            return None
 
-        # --- 步骤 3：提交登录 ---
-        print("[INFO] 提交登录...")
+        # 如果能运行到这里，说明验证码肯定通过了
+        print("[INFO] 验证通过，开始提交登录...")
         driver.click("button[type='submit']")
         time.sleep(10)
         take_screenshot(driver, account_index, "05_提交登录跳转后")
 
-        # --- 步骤 4：提取服务器并进入管理页 ---
         try:
             element = driver.find_element("xpath", "//span[contains(text(),'Free Server #')]")
             sid = re.search(r'Free Server #(\d+)', element.text).group(1)
@@ -254,7 +238,6 @@ def process_single_account(driver, email, pwd, account_index):
             take_screenshot(driver, account_index, "06-1_服务器定位或登录失败")
             return None
 
-        # --- 步骤 5：执行续订 ---
         print("[INFO] 尝试点击 Renew 按钮...")
         try:
             renew_btn = driver.find_element("xpath", "//button[contains(text(),'Renew')]")
@@ -270,7 +253,6 @@ def process_single_account(driver, email, pwd, account_index):
             print("[WARN] 未找到续期按钮，可能还没有到可续期的时间")
             take_screenshot(driver, account_index, "07-1_无续期按钮")
 
-        # --- 步骤 6：抓取最终到期时间 ---
         driver.get(manage_url)
         time.sleep(5)
         take_screenshot(driver, account_index, "09_刷新页面获取最终结果")
@@ -293,12 +275,12 @@ def process_single_account(driver, email, pwd, account_index):
 # =========================================================
 def main():
     print("[INFO] 启动浏览器自动化 (包含强化版 CF 绕过与全程截图)...")
-    driver = Driver(headless=True, uc=True)
+    # 【修改点 1】强制指定 window_size 为标准的 1080P 电脑屏幕尺寸，保证坐标精准！
+    driver = Driver(headless=True, uc=True, window_size="1920,1080")
     
     earliest_date_obj = None
     
     try:
-        # enumerate(account_list, 1) 会自动给每个账号编号，1, 2, 3...
         for index, acc in enumerate(account_list, 1):
             email = acc["email"]
             pwd = acc["pwd"]
@@ -307,7 +289,6 @@ def main():
             print(f"▶ 正在测试账号 [{index}/{len(account_list)}]")
             print("=" * 50)
             
-            # 把账号序号 index 也传进去，方便截图命名
             std_date_str = process_single_account(driver, email, pwd, index)
             
             if std_date_str:
