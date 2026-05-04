@@ -3,12 +3,14 @@ name: HidenCloud 核心自动续期
 on:
   workflow_dispatch:  # 允许在 GitHub 网页上手动点击 "Run workflow" 触发测试
   schedule:
-    # 定时任务：每 3 天运行一次 (世界标准时间 UTC 00:00，大概是北京时间早上 8 点)
-    # 相比于精确计算，固定频率运行是最稳妥、最不容易报错的方案
-    - cron: '0 0 */3 * *'   
+    # 定时任务：保底策略改为每天运行一次 (UTC 00:00)
+    # 如果配置了 REPO_TOKEN，Python 脚本会在运行后自动改写这个时间
+    - cron: '0 0 * * *'   
 
 permissions:
-  contents: read     # 精简了权限，既然不再自动改写 yaml 文件，就不需要 write 权限了
+  # 【修复】：因为 Python 脚本需要改写这个 yml 文件本身并 Push
+  # 必须将 contents 的权限提升为 write
+  contents: write     
   actions: write
 
 jobs:
@@ -24,23 +26,21 @@ jobs:
           python-version: '3.11'
 
       - name: 步骤 3：安装必要的反检测与浏览器依赖包
-        # 加上隐身插件相关的库，确保脚本里的 stealth 能正常工作
         run: pip install --quiet seleniumbase playwright-stealth
 
       - name: 步骤 4：运行多账号续期 Python 脚本
         env:
-          # 【核心修复】这里必须叫 TEST_ACCOUNTS，才能和 main.py 里的 os.environ.get("TEST_ACCOUNTS") 对接上！
-          # 等号右边的 secrets.HIDENCLOUD 是你在 GitHub Settings -> Secrets 里设置的密码本名字
           TEST_ACCOUNTS: ${{ secrets.HIDENCLOUD }}
-        # 使用 -u 强制无缓冲输出，实时查看日志
+          # 【核心修复】：必须将你设置的 Token 暴露给 Python 脚本，否则它无法识别
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
         run: python3 -u main.py 2>&1 | tee renew.log
 
       - name: 步骤 5：打包输出所有的截图和日志
-        if: always()   # 【重要】不管上面的代码有没有报错，必须执行截图打包，方便我们排查原因
+        if: always()   
         uses: actions/upload-artifact@v4
         with:
           name: 运行截图与日志-${{ github.run_id }}
           path: |
             screenshots/*.png
             renew.log
-          retention-days: 7   # 截图文件在 GitHub 上保存 7 天后自动删除
+          retention-days: 7
