@@ -190,40 +190,10 @@ def main():
     sid = None
 
     try:
-# ---------- 1. 访问主页 (🌟 修复版：精准捕获网络错误) ----------
+        # ---------- 1. 访问主页 ----------
         print(f"[INFO] 🌐 访问主页: {BASE_URL}/dashboard")
-        
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # 尝试访问网页
-                driver.get(f"{BASE_URL}/dashboard")
-                time.sleep(4) # 给网页一点反应时间
-                
-                # 获取当前的网址和网页源码
-                current_url = driver.current_url
-                page_text = driver.get_page_source()
-                
-                # 如果还停留在 about:blank 初始页，或者源码里有报错，说明失败了
-                if "about:blank" in current_url or "ERR_" in page_text or "This site can" in page_text:
-                    print(f"[WARN] ⚠️ 页面加载失败 (尝试 {attempt + 1}/{max_retries})，准备重试...")
-                    time.sleep(3)
-                    continue # 直接进入下一次重试循环
-                
-                # 如果没报错，说明真的成功了
-                print("[INFO] ✅ 页面加载成功！")
-                break 
-                
-            except Exception as e:
-                # 捕获了 driver.get() 底层的崩溃错误（比如代理彻底连不上）
-                print(f"[WARN] ⚠️ 底层网络异常 (尝试 {attempt + 1}/{max_retries}): {str(e)[:60]}...")
-                time.sleep(3)
-        else:
-            # 循环了3次都失败了
-            print("[ERROR] ❌ 连续 3 次访问均失败，网页彻底打不开。")
-            take_screenshot(driver, "ERROR-connection-fatal")
-            raise Exception("网络代理不稳定或彻底失效，请更换代理节点。")
-            
+        driver.get(f"{BASE_URL}/dashboard")
+        time.sleep(3)
         take_screenshot(driver, "01-initial")
 
         # ---------- 2. 登录判断 ----------
