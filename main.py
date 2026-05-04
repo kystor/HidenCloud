@@ -1,5 +1,7 @@
 import os
 import time
+import re
+from datetime import datetime, timedelta
 from seleniumbase import SB
 
 # =========================================================
@@ -10,7 +12,7 @@ if not os.path.exists(SCREENSHOT_DIR):
     os.makedirs(SCREENSHOT_DIR)
 
 def take_screenshot(sb, account_index, step_name):
-    """辅助函数：给当前网页拍照并保存，方便排查报错原因"""
+    """辅助函数：给当前网页拍照并保存，方便排查报错"""
     file_path = os.path.join(SCREENSHOT_DIR, f"acc{account_index}_{step_name}.png")
     try:
         sb.save_screenshot(file_path)
@@ -19,20 +21,18 @@ def take_screenshot(sb, account_index, step_name):
         pass
 
 # =========================================================
-# 处理 Cloudflare 整页 5 秒盾 
+# 处理 Cloudflare 验证
 # =========================================================
 def is_cloudflare_interstitial(sb) -> bool:
-    """检查当前页面是否是 Cloudflare 的 5 秒盾等待页"""
     try:
         page_source = sb.get_page_source()
         title = sb.get_title().lower() if sb.get_title() else ""
-        indicators = ["Just a moment", "Verify you are human", "Checking your browser", "Checking if the site connection is secure"]
+        indicators = ["Just a moment", "Verify you are human", "Checking your browser"]
         for ind in indicators:
             if ind in page_source:
                 return True
         if "just a moment" in title or "attention required" in title:
             return True
-        
         body_len = sb.execute_script('(function() { return document.body ? document.body.innerText.length : 0; })();')
         if body_len is not None and body_len < 200 and "challenges.cloudflare.com" in page_source:
             return True
@@ -41,7 +41,6 @@ def is_cloudflare_interstitial(sb) -> bool:
         return False
 
 def bypass_cloudflare_interstitial(sb, max_attempts=3) -> bool:
-    """尝试绕过 Cloudflare 的整页盾"""
     print("    🛡️ 检测到 CF 5秒盾，准备破除...")
     for attempt in range(max_attempts):
         print(f"      ▶ 尝试绕过 ({attempt+1}/{max_attempts})...")
@@ -52,19 +51,14 @@ def bypass_cloudflare_interstitial(sb, max_attempts=3) -> bool:
                 print("      ✅ CF 5秒盾已通过！")
                 return True
         except Exception as e:
-            print(f"      ⚠️ 绕过异常: {e}")
+            pass
         time.sleep(3)
     return False
 
-# =========================================================
-# 处理 Turnstile 组件
-# =========================================================
 def handle_turnstile_verification(sb) -> bool:
-    """综合处理登录页和弹窗中的 CF Turnstile 验证码"""
     try:
         cookie_btn = 'button[data-cky-tag="accept-button"]'
         if sb.is_element_visible(cookie_btn):
-            print("    🍪 清理 Cookie 弹窗干扰...")
             sb.click(cookie_btn)
             time.sleep(1)
     except:
@@ -72,9 +66,7 @@ def handle_turnstile_verification(sb) -> bool:
 
     sb.execute_script('''
         try {
-            var t = document.querySelector('.cf-turnstile') || 
-                    document.querySelector('iframe[src*="challenges.cloudflare"]') || 
-                    document.querySelector('iframe[src*="turnstile"]');
+            var t = document.querySelector('.cf-turnstile') || document.querySelector('iframe[src*="turnstile"]');
             if (t) t.scrollIntoView({behavior:'smooth', block:'center'});
         } catch(e) {}
     ''')
@@ -82,222 +74,273 @@ def handle_turnstile_verification(sb) -> bool:
 
     has_turnstile = False
     for _ in range(15):
-        if (sb.is_element_present('iframe[src*="challenges.cloudflare"]') or 
-            sb.is_element_present('iframe[src*="turnstile"]') or 
-            sb.is_element_present('.cf-turnstile') or 
-            sb.is_element_present('input[name="cf-turnstile-response"]')):
+        if sb.is_element_present('iframe[src*="challenges.cloudflare"]') or sb.is_element_present('.cf-turnstile'):
             has_turnstile = True
             break
         time.sleep(1)
 
     if not has_turnstile:
-        print("    🟢 无感验证通过 (未发现 Turnstile)")
+        print("    🟢 无感验证通过")
         return True
 
     print("    🧩 发现验证码，执行拟人点击...")
     verified = False
-    
     for attempt in range(1, 4):
-        print(f"      ▶ 点击尝试 ({attempt}/3)...")
         try:
             sb.uc_gui_click_captcha()
         except:
             pass
-            
         for _ in range(10):
             if sb.is_element_present('input[name="cf-turnstile-response"]'):
                 token = sb.get_attribute('input[name="cf-turnstile-response"]', 'value')
                 if token and len(token) > 20:
-                    print("      ✅ 物理点击成功，已获取 Token！")
+                    print("      ✅ 验证成功获取 Token！")
                     verified = True
                     break
             time.sleep(1)
-            
         if verified:
             break
 
     if not verified:
-        print("    ⏳ 等待验证码自动计算 (最多30秒)...")
-        for _ in range(30):
-            if sb.is_element_present('input[name="cf-turnstile-response"]'):
-                token = sb.get_attribute('input[name="cf-turnstile-response"]', 'value')
-                if token and len(token) > 20:
-                    print("      ✅ 验证码自动放行，已获取 Token！")
-                    verified = True
-                    break
-            time.sleep(1)
-
-    if not verified:
-        print("    ❌ 验证失败，未获取有效 Token。")
+        print("    ❌ 验证失败。")
         return False
-        
     return True
 
 # =========================================================
-# 单个账号的处理主流程
+# 单个账号的处理主流程 (返回该账号下最早的到期时间)
 # =========================================================
 def process_account(account_index, username, password):
+    earliest_date_for_account = None # 记录该账号下最先到期的服务器时间
+
     with SB(uc=True, test=True, locale="en", chromium_arg="--disable-blink-features=AutomationControlled") as sb:
-        
-        print(f"  [1/6] 🌐 访问 HidenCloud Dash 登录页...")
-        # 【修改点1】将网址替换为正确的 dash 面板地址
+        print(f"  [1/4] 🌐 访问 HidenCloud 登录页...")
         sb.uc_open_with_reconnect("https://dash.hidencloud.com/dashboard", reconnect_time=8)
         time.sleep(4)
-        take_screenshot(sb, account_index, "01_访问初始页")
-
+        
         if is_cloudflare_interstitial(sb):
-            if not bypass_cloudflare_interstitial(sb):
-                print(f"  ❌ 终止测试：无法绕过 CF 整页拦截。")
-                take_screenshot(sb, account_index, "01-1_整页拦截失败")
-                return 
-            time.sleep(3) 
+            bypass_cloudflare_interstitial(sb)
 
-        print(f"  [2/6] 🔑 填写账号与密码...")
+        print(f"  [2/4] 🔑 填写账号与密码...")
         try:
             sb.wait_for_element_visible('input[type="email"], input[type="text"]', timeout=10)
             sb.type('input[type="email"], input[type="text"]', username)
             sb.type('input[type="password"]', password)
-            take_screenshot(sb, account_index, "02_表单填写")
         except Exception as e:
-            print(f"  ❌ 填写失败: 未找到输入框 ({e})")
-            take_screenshot(sb, account_index, "02_报错")
-            return
+            print(f"  ❌ 填写表单失败: {e}")
+            return None
 
-        print(f"  [3/6] 🛡️ 处理登录安全验证...")
         handle_turnstile_verification(sb)
-
-        print(f"  [4/6] 🚀 提交登录...")
+        
         try:
             sb.click('button[type="submit"]')
         except:
-            try:
-                sb.execute_script('(function() { document.querySelector("form").submit(); })();')
-            except Exception as e:
-                print(f"  ❌ 点击登录失败: {e}")
+            sb.execute_script('(function() { document.querySelector("form").submit(); })();')
 
         time.sleep(6) 
-        take_screenshot(sb, account_index, "04_提交登录后")
 
-        print(f"  [5/6] 📂 跳转至服务器列表页...")
-        # 【修改点2】登录成功后，确保停留在 dashboard 页面
+        print(f"  [3/4] 📂 获取服务器列表与解析信息...")
         sb.open("https://dash.hidencloud.com/dashboard")
         time.sleep(5)
-        take_screenshot(sb, account_index, "05_面板主页")
+        take_screenshot(sb, account_index, "面板主页")
 
-        print(f"  [6/6] 🔄 扫描并续期/重置...")
+        print(f"  [4/4] 🔄 智能解析并执行续期逻辑...")
         try:
-            # 寻找页面上可能代表服务器卡片的元素
-            app_card_selector = "div.cursor-pointer, a[href*='/server/']" 
-            
-            if sb.is_element_visible(app_card_selector):
-                elements = sb.find_elements(app_card_selector)
-                app_count = len(elements)
-                print(f"    📊 发现 {app_count} 个服务卡片，开始尝试处理：")
+            rows_selector = "tr[data-accordion-target]"
+            if sb.is_element_visible(rows_selector):
+                elements = sb.find_elements(rows_selector)
+                print(f"    📊 发现 {len(elements)} 台服务器，开始解析状态：")
 
-                for i in range(app_count):
-                    cards = sb.find_elements(app_card_selector)
-                    current_card = cards[i]
-                    app_name = current_card.text.strip()[:10] 
+                for i in range(len(elements)):
+                    row = sb.find_elements(rows_selector)[i]
+                    row_text = row.text 
                     
-                    print(f"    ------------------------------------")
-                    print(f"    📦 处理项目 ({i+1}/{app_count}): {app_name}")
-                    
-                    try:
-                        current_card.click()
-                        time.sleep(4) 
-                        take_screenshot(sb, account_index, f"06_{app_name}_详情页")
+                    sid_match = re.search(r'#(\d+)', row_text)
+                    date_match = re.search(r'(\d{2}\s+[A-Za-z]{3}\s+\d{4})', row_text)
+                    status_match = re.search(r'(Active|Pending|Suspended)', row_text, re.IGNORECASE)
 
-                        reset_btn_selector = "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'renew')]"
+                    if sid_match and date_match and status_match:
+                        sid = sid_match.group(1)
+                        due_date_str = date_match.group(1)
+                        status = status_match.group(1)
                         
-                        if sb.is_element_visible(reset_btn_selector):
-                            print(f"      🖱️ 点击 [Renew] 续期按钮...")
-                            sb.click(reset_btn_selector)
-                            time.sleep(5)  
-                            take_screenshot(sb, account_index, f"07_{app_name}_弹窗")
+                        # 转换时间并计算剩余小时数
+                        due_date = datetime.strptime(due_date_str, "%d %b %Y")
+                        now = datetime.utcnow()
+                        time_left = due_date - now
+                        hours_left = time_left.total_seconds() / 3600
+                        
+                        # 更新当前账号的最早到期时间
+                        if not earliest_date_for_account or due_date < earliest_date_for_account:
+                            earliest_date_for_account = due_date
+
+                        print(f"    ------------------------------------")
+                        print(f"    📦 服务器 ID: {sid}")
+                        print(f"    📌 当前状态 : {status}")
+                        print(f"    📅 到期时间 : {due_date_str} (剩余 {hours_left:.1f} 小时)")
+
+                        # 【规则更新】：降至 20 小时触发续期
+                        if hours_left <= 20:
+                            print(f"      ⚠️ 触发续期：距离到期不足 20 小时！")
+                            manage_url = f"https://dash.hidencloud.com/service/{sid}/manage"
+                            sb.open(manage_url)
+                            time.sleep(5)
                             
-                            print(f"      🛡️ 处理可能的弹窗验证...")
-                            handle_turnstile_verification(sb)
-                            take_screenshot(sb, account_index, f"08_{app_name}_验证后")
-
-                            print(f"      🖱️ 确认续期...")
-                            sb.execute_script('''
-                                (function() {
-                                    var btns = document.querySelectorAll('button');
-                                    for(var i=0; i<btns.length; i++) {
-                                        var t = btns[i].innerText.toLowerCase();
-                                        if(t.includes('confirm') || t.includes('yes') || t.includes('renew')) {
-                                            btns[i].click();
-                                            break;
+                            renew_btn_selector = "button[onclick*='showRenewAlert']"
+                            if sb.is_element_visible(renew_btn_selector):
+                                print(f"      🖱️ 点击 [Renew] 续期按钮...")
+                                sb.click(renew_btn_selector)
+                                time.sleep(3)  
+                                handle_turnstile_verification(sb)
+                                
+                                print(f"      🖱️ 确认续期弹窗...")
+                                sb.execute_script('''
+                                    (function() {
+                                        var btns = document.querySelectorAll('button');
+                                        for(var i=0; i<btns.length; i++) {
+                                            var t = btns[i].innerText.toLowerCase();
+                                            var c = btns[i].className.toLowerCase();
+                                            if(t.includes('confirm') || t.includes('yes') || t.includes('ok') || c.includes('confirm')) {
+                                                btns[i].click();
+                                                break;
+                                            }
                                         }
-                                    }
-                                })();
-                            ''')
-                            time.sleep(5) 
-                            print(f"      ✨ 操作完成！")
+                                    })();
+                                ''')
+                                time.sleep(4) 
+                                print(f"      ✨ 服务器 {sid} 续期操作完成！")
+                                
+                                # 续期成功后，理论上服务器获得了新的到期时间
+                                # 为了安全起见，我们将这台服务器的到期时间临时+1个月，避免影响全局最小时间的计算
+                                earliest_date_for_account = due_date + timedelta(days=30) 
+                            else:
+                                print(f"      ℹ️ 管理页未找到续期按钮。")
+                                
+                            sb.open("https://dash.hidencloud.com/dashboard")
+                            time.sleep(5)
                         else:
-                            print(f"      ℹ️ 当前页面未找到续期按钮。")
-                    except Exception as inner_e:
-                        print(f"      ⚠️ 点击卡片或续期报错: {inner_e}")
-                    
-                    print(f"      🔙 返回列表页...")
-                    # 【修改点3】处理完一个项目后，退回到正确的 dashboard 地址
-                    sb.open("https://dash.hidencloud.com/dashboard")
-                    time.sleep(5)
-
+                            print(f"      🟢 判定结果：时间充足，本次跳过续期。")
+                    else:
+                        print(f"    ⚠️ 无法完整解析该行数据。")
             else:
-                print(f"    ℹ️ 未在主页发现任何可点击的服务器卡片。")
+                print(f"    ℹ️ 未发现任何服务器实例。")
                 
         except Exception as e:
             print(f"  ❌ 操作过程中发生错误: {e}")
-            take_screenshot(sb, account_index, "99_操作报错")
 
         print(f"  🎉 账号 {account_index} 测试完成！")
+        return earliest_date_for_account
+
+# =========================================================
+# 修改工作流并推送到 GitHub
+# =========================================================
+def update_github_workflow_cron(global_earliest_date):
+    """根据最早到期时间和 REPO_TOKEN 的存在情况，动态修改并推送工作流文件"""
+    print("\n" + "=" * 50)
+    print("⚙️ 开始执行工作流自动优化逻辑...")
+    
+    repo_token = os.environ.get("REPO_TOKEN")
+    workflow_dir = ".github/workflows"
+    
+    # 查找工作流文件
+    target_file = None
+    if os.path.exists(workflow_dir):
+        for file in os.listdir(workflow_dir):
+            if file.endswith(".yml") or file.endswith(".yaml"):
+                target_file = os.path.join(workflow_dir, file)
+                break
+                
+    if not target_file:
+        print("  ⚠️ 未找到 .github/workflows 下的 YAML 文件，跳过此步骤。")
+        return
+
+    # 计算新的 Cron 表达式
+    if not repo_token:
+        print("  ℹ️ 未检测到 REPO_TOKEN，应用默认规则：每 3 天执行一次。")
+        new_cron = "0 0 */3 * *"
+    else:
+        if global_earliest_date:
+            now = datetime.utcnow()
+            time_left = global_earliest_date - now
+            hours_left = time_left.total_seconds() / 3600
+            
+            # 提前 20 小时执行
+            run_in_hours = hours_left - 20
+            if run_in_hours <= 0:
+                run_in_hours = 4  # 如果出现异常或已过期，默认 4 小时后复查
+                
+            next_run = now + timedelta(hours=run_in_hours)
+            new_cron = f"{next_run.minute} {next_run.hour} {next_run.day} {next_run.month} *"
+            print(f"  ⏰ 已追踪到全局最先到期时间！下一次启动预定在 UTC {next_run.strftime('%Y-%m-%d %H:%M')}")
+            print(f"  📝 生成的 Cron 表达式: '{new_cron}'")
+        else:
+            print("  ⚠️ 未能提取到任何有效服务器日期，回退至默认规则：每 3 天执行一次。")
+            new_cron = "0 0 */3 * *"
+
+    # 读取并修改 YAML 文件
+    try:
+        with open(target_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # 使用正则表达式替换原有的 cron 值
+        new_content = re.sub(r"cron:\s*'.*?'", f"cron: '{new_cron}'", content)
+        new_content = re.sub(r'cron:\s*".*?"', f'cron: "{new_cron}"', new_content)
+        
+        if new_content != content:
+            with open(target_file, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            print(f"  ✅ 成功将新的时间写入文件: {target_file}")
+            
+            # 使用 REPO_TOKEN 进行 Git 推送
+            if repo_token:
+                github_repo = os.environ.get("GITHUB_REPOSITORY")
+                if github_repo:
+                    print("  🚀 正在使用 REPO_TOKEN 提交并推送修改到 GitHub...")
+                    # 配置身份并推送（加入 [skip ci] 防止触发自身无限循环）
+                    os.system('git config --global user.name "github-actions[bot]"')
+                    os.system('git config --global user.email "github-actions[bot]@users.noreply.github.com"')
+                    os.system(f'git remote set-url origin https://x-access-token:{repo_token}@github.com/{github_repo}.git')
+                    os.system(f'git add {target_file}')
+                    os.system('git commit -m "🔄 自动更新下次续期时间 [skip ci]"')
+                    os.system('git push')
+                    print("  🌟 GitHub 仓库时间线已成功更新！")
+        else:
+            print("  ℹ️ Cron 时间与当前一致，无需提交更改。")
+            
+    except Exception as e:
+        print(f"  ❌ 修改或推送工作流文件时出错: {e}")
 
 # =========================================================
 # 程序入口点
 # =========================================================
 def main():
     accounts_str = os.environ.get("TEST_ACCOUNTS", "你的邮箱@outlook.com:你的密码")
-    
     if not accounts_str:
-        print("❌ 错误：没有找到账号配置！")
         return
+    
+    account_list = [pair.split(':', 1) for pair in accounts_str.split(',') if ':' in pair]
+    print(f"\n✅ 初始化成功，开始执行任务...\n")
 
-    account_list = []
-    for pair in accounts_str.split(','):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if ':' in pair:
-            username, password = pair.split(':', 1) 
-            account_list.append((username.strip(), password.strip()))
-        else:
-            print(f"⚠️ 警告：跳过无效账号格式 -> {pair}")
-
-    print(f"\n✅ 初始化成功，共载入 {len(account_list)} 个账号，开始执行任务...\n")
+    global_earliest_date = None # 记录所有账号中最先到期的时间
 
     for index, (username, password) in enumerate(account_list, 1):
-        masked_user = username
-        if "@" in username:
-            parts = username.split("@")
-            masked_user = parts[0][:2] + "***@" + parts[1]
-            
+        username, password = username.strip(), password.strip()
         print("=" * 50)
-        print(f"▶ 正在测试账号 [{index}/{len(account_list)}]: {masked_user}")
+        print(f"▶ 正在测试账号 [{index}/{len(account_list)}]: {username}")
         print("=" * 50)
-        
         try:
-            process_account(index, username, password)
+            acc_earliest_date = process_account(index, username, password)
+            # 对比找出全局最早到期的一台服务器
+            if acc_earliest_date:
+                if not global_earliest_date or acc_earliest_date < global_earliest_date:
+                    global_earliest_date = acc_earliest_date
         except Exception as e:
-            print(f"❌ 账号 {masked_user} 发生崩溃异常: {e}")
-            
-        if index < len(account_list):
-            print(f"\n⏳ 冷却 5 秒后准备切换下一账号...\n")
-            time.sleep(5)
-
+            print(f"❌ 崩溃异常: {e}")
+        time.sleep(5)
+        
+    # 所有账号处理完毕，执行动态时间更新
+    update_github_workflow_cron(global_earliest_date)
     print("\n" + "=" * 50)
-    print("🎊 所有账号自动化任务执行完毕！")
-    print("   ↳ 请前往存储目录下载并查看截图。")
+    print("🎊 自动化流程全剧终！期待下次唤醒。")
     print("=" * 50 + "\n")
 
 if __name__ == "__main__":
