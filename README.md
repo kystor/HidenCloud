@@ -28,7 +28,7 @@
 |---|---|---|---|
 | `HIDENCLOUD` | ✅ | HidenCloud 账号信息 | 见下方格式 |
 | `REPO_TOKEN` | ✅ | 用于推送 Cron 更新的 GitHub Token | `ghp_xxxxxxxxxxxxxxxxxxxx`（需要特定权限，见下文） |
-| `PROXY_NODE` | ✅ | 代理节点地址，支持多种协议 | 见下方代理格式 |
+| `PROXY_NODE` | ❌ | 暂未支持（代理节点地址，支持多种协议） | 见下方代理格式 |
 | `TG_BOT_TOKEN` | ❌ | Telegram Bot Token | `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `TG_CHAT_ID` | ❌ | Telegram Chat ID | `123456789` |
 
