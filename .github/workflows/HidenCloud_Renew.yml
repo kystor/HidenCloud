@@ -23,8 +23,6 @@ jobs:
           python-version: '3.11'
 
       - name: 安装依赖
-        # 📌 【修改点 1】：固定 seleniumbase 的版本为 4.27.1（这是一个相对稳定且支持 xvfb 参数的旧版本）。
-        # 这样以后官方再怎么更新，都不会影响我们现在的脚本运行了。
         run: |
           pip install --quiet seleniumbase==4.27.1 requests beautifulsoup4
 
@@ -357,13 +355,11 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           PROXY_SERVER: ${{ env.PROXY_SERVER }}
-        # 📌 【修改点 2】：在这里加上了 -u 参数 (unbuffered)。
-        # -u 告诉 Python 不要缓冲输出，有任何 print 打印的信息都要立刻显示在控制台上。
-        # 对于我们在 Github Actions 看实时日志非常有帮助！
         run: |
-          python3 -u main.py 2>&1 | tee renew.log
+          # 📌 安装虚拟显示器工具 xvfb，并使用 xvfb-run 运行脚本，防止 Chrome 找不到显示器报错
+          sudo apt-get update && sudo apt-get install -y xvfb
+          xvfb-run --auto-servernum python3 -u main.py 2>&1 | tee renew.log
 
-     # 如需上传日志截图，可取消注释以下步骤
       - name: 上传日志和截图
         if: always()
         uses: actions/upload-artifact@v4
