@@ -107,26 +107,32 @@ def handle_turnstile_verification(sb) -> bool:
     return True
 
 # =========================================================
-# 单个账号的处理主流程 (返回该账号下最早的到期时间)
+# 单个账号的处理主流程
 # =========================================================
 def process_account(account_index, username, password):
-    earliest_date_for_account = None # 记录该账号下最先到期的服务器时间
+    earliest_date_for_account = None 
 
     with SB(uc=True, test=True, locale="en", chromium_arg="--disable-blink-features=AutomationControlled") as sb:
         print(f"  [1/4] 🌐 访问 HidenCloud 登录页...")
         sb.uc_open_with_reconnect("https://dash.hidencloud.com/dashboard", reconnect_time=8)
         time.sleep(4)
+        take_screenshot(sb, account_index, "01_访问初始页")
         
         if is_cloudflare_interstitial(sb):
-            bypass_cloudflare_interstitial(sb)
+            if not bypass_cloudflare_interstitial(sb):
+                print(f"  ❌ 终止测试：无法绕过 CF 整页拦截。")
+                take_screenshot(sb, account_index, "01-1_整页拦截失败")
+                return None
 
         print(f"  [2/4] 🔑 填写账号与密码...")
         try:
             sb.wait_for_element_visible('input[type="email"], input[type="text"]', timeout=10)
             sb.type('input[type="email"], input[type="text"]', username)
             sb.type('input[type="password"]', password)
+            take_screenshot(sb, account_index, "02_表单填写")
         except Exception as e:
             print(f"  ❌ 填写表单失败: {e}")
+            take_screenshot(sb, account_index, "02_报错")
             return None
 
         handle_turnstile_verification(sb)
@@ -137,11 +143,12 @@ def process_account(account_index, username, password):
             sb.execute_script('(function() { document.querySelector("form").submit(); })();')
 
         time.sleep(6) 
+        take_screenshot(sb, account_index, "04_提交登录后")
 
         print(f"  [3/4] 📂 获取服务器列表与解析信息...")
         sb.open("https://dash.hidencloud.com/dashboard")
         time.sleep(5)
-        take_screenshot(sb, account_index, "面板主页")
+        take_screenshot(sb, account_index, "05_面板主页")
 
         print(f"  [4/4] 🔄 智能解析并执行续期逻辑...")
         try:
@@ -163,13 +170,11 @@ def process_account(account_index, username, password):
                         due_date_str = date_match.group(1)
                         status = status_match.group(1)
                         
-                        # 转换时间并计算剩余小时数
                         due_date = datetime.strptime(due_date_str, "%d %b %Y")
                         now = datetime.utcnow()
                         time_left = due_date - now
                         hours_left = time_left.total_seconds() / 3600
                         
-                        # 更新当前账号的最早到期时间
                         if not earliest_date_for_account or due_date < earliest_date_for_account:
                             earliest_date_for_account = due_date
 
@@ -178,18 +183,21 @@ def process_account(account_index, username, password):
                         print(f"    📌 当前状态 : {status}")
                         print(f"    📅 到期时间 : {due_date_str} (剩余 {hours_left:.1f} 小时)")
 
-                        # 【规则更新】：降至 20 小时触发续期
+                        # 距离到期不足 20 小时触发续期
                         if hours_left <= 20:
                             print(f"      ⚠️ 触发续期：距离到期不足 20 小时！")
                             manage_url = f"https://dash.hidencloud.com/service/{sid}/manage"
                             sb.open(manage_url)
                             time.sleep(5)
+                            take_screenshot(sb, account_index, f"06_ID_{sid}_管理页")
                             
                             renew_btn_selector = "button[onclick*='showRenewAlert']"
                             if sb.is_element_visible(renew_btn_selector):
                                 print(f"      🖱️ 点击 [Renew] 续期按钮...")
                                 sb.click(renew_btn_selector)
                                 time.sleep(3)  
+                                take_screenshot(sb, account_index, f"07_ID_{sid}_点击弹窗")
+                                
                                 handle_turnstile_verification(sb)
                                 
                                 print(f"      🖱️ 确认续期弹窗...")
@@ -207,10 +215,9 @@ def process_account(account_index, username, password):
                                     })();
                                 ''')
                                 time.sleep(4) 
+                                take_screenshot(sb, account_index, f"08_ID_{sid}_续期完成")
                                 print(f"      ✨ 服务器 {sid} 续期操作完成！")
                                 
-                                # 续期成功后，理论上服务器获得了新的到期时间
-                                # 为了安全起见，我们将这台服务器的到期时间临时+1个月，避免影响全局最小时间的计算
                                 earliest_date_for_account = due_date + timedelta(days=30) 
                             else:
                                 print(f"      ℹ️ 管理页未找到续期按钮。")
@@ -226,6 +233,7 @@ def process_account(account_index, username, password):
                 
         except Exception as e:
             print(f"  ❌ 操作过程中发生错误: {e}")
+            take_screenshot(sb, account_index, "99_操作报错")
 
         print(f"  🎉 账号 {account_index} 测试完成！")
         return earliest_date_for_account
@@ -238,10 +246,9 @@ def update_github_workflow_cron(global_earliest_date):
     print("\n" + "=" * 50)
     print("⚙️ 开始执行工作流自动优化逻辑...")
     
-    repo_token = os.environ.get("REPO_TOKEN")
+    repo_token = os.environ.get("REPO_TOKEN", "").strip()
     workflow_dir = ".github/workflows"
     
-    # 查找工作流文件
     target_file = None
     if os.path.exists(workflow_dir):
         for file in os.listdir(workflow_dir):
@@ -255,33 +262,30 @@ def update_github_workflow_cron(global_earliest_date):
 
     # 计算新的 Cron 表达式
     if not repo_token:
-        print("  ℹ️ 未检测到 REPO_TOKEN，应用默认规则：每 3 天执行一次。")
-        new_cron = "0 0 */3 * *"
+        print("  ℹ️ 未检测到有效 REPO_TOKEN，应用默认规则：每天执行一次。")
+        new_cron = "0 0 * * *"
     else:
         if global_earliest_date:
             now = datetime.utcnow()
             time_left = global_earliest_date - now
             hours_left = time_left.total_seconds() / 3600
             
-            # 提前 20 小时执行
             run_in_hours = hours_left - 20
             if run_in_hours <= 0:
-                run_in_hours = 4  # 如果出现异常或已过期，默认 4 小时后复查
+                run_in_hours = 4  
                 
             next_run = now + timedelta(hours=run_in_hours)
             new_cron = f"{next_run.minute} {next_run.hour} {next_run.day} {next_run.month} *"
             print(f"  ⏰ 已追踪到全局最先到期时间！下一次启动预定在 UTC {next_run.strftime('%Y-%m-%d %H:%M')}")
             print(f"  📝 生成的 Cron 表达式: '{new_cron}'")
         else:
-            print("  ⚠️ 未能提取到任何有效服务器日期，回退至默认规则：每 3 天执行一次。")
-            new_cron = "0 0 */3 * *"
+            print("  ⚠️ 未能提取到任何有效服务器日期，回退至默认规则：每天执行一次。")
+            new_cron = "0 0 * * *"
 
-    # 读取并修改 YAML 文件
     try:
         with open(target_file, 'r', encoding='utf-8') as f:
             content = f.read()
             
-        # 使用正则表达式替换原有的 cron 值
         new_content = re.sub(r"cron:\s*'.*?'", f"cron: '{new_cron}'", content)
         new_content = re.sub(r'cron:\s*".*?"', f'cron: "{new_cron}"', new_content)
         
@@ -290,12 +294,10 @@ def update_github_workflow_cron(global_earliest_date):
                 f.write(new_content)
             print(f"  ✅ 成功将新的时间写入文件: {target_file}")
             
-            # 使用 REPO_TOKEN 进行 Git 推送
             if repo_token:
                 github_repo = os.environ.get("GITHUB_REPOSITORY")
                 if github_repo:
                     print("  🚀 正在使用 REPO_TOKEN 提交并推送修改到 GitHub...")
-                    # 配置身份并推送（加入 [skip ci] 防止触发自身无限循环）
                     os.system('git config --global user.name "github-actions[bot]"')
                     os.system('git config --global user.email "github-actions[bot]@users.noreply.github.com"')
                     os.system(f'git remote set-url origin https://x-access-token:{repo_token}@github.com/{github_repo}.git')
@@ -320,7 +322,7 @@ def main():
     account_list = [pair.split(':', 1) for pair in accounts_str.split(',') if ':' in pair]
     print(f"\n✅ 初始化成功，开始执行任务...\n")
 
-    global_earliest_date = None # 记录所有账号中最先到期的时间
+    global_earliest_date = None 
 
     for index, (username, password) in enumerate(account_list, 1):
         username, password = username.strip(), password.strip()
@@ -329,7 +331,6 @@ def main():
         print("=" * 50)
         try:
             acc_earliest_date = process_account(index, username, password)
-            # 对比找出全局最早到期的一台服务器
             if acc_earliest_date:
                 if not global_earliest_date or acc_earliest_date < global_earliest_date:
                     global_earliest_date = acc_earliest_date
@@ -337,7 +338,6 @@ def main():
             print(f"❌ 崩溃异常: {e}")
         time.sleep(5)
         
-    # 所有账号处理完毕，执行动态时间更新
     update_github_workflow_cron(global_earliest_date)
     print("\n" + "=" * 50)
     print("🎊 自动化流程全剧终！期待下次唤醒。")
