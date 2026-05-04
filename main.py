@@ -4,10 +4,11 @@
 """
 HidenCloud 自动续期脚本（SeleniumBase）
 
-本版修改原则：
-1. 不改变 CF 验证相关逻辑
-2. 仅修复 GitHub Actions / Linux 下浏览器关闭超时、窗口关闭失败的问题
-3. 保留 user_data_dir，尽量不破坏你原有的登录态与站点行为
+本版修复点：
+1. 不再向 Driver() 传递 xvfb 参数
+2. 保留原有 CF 验证逻辑，不改核心流程
+3. 保留 user_data_dir，尽量维持原登录态
+4. 加强浏览器退出保护，避免 finally 再次报错
 """
 
 import os
@@ -43,15 +44,15 @@ else:
 
 
 # =========================================================
-# 通用工具函数
+# 基础工具
 # =========================================================
 def get_bj_time():
-    """获取北京时间字符串"""
+    """返回北京时间字符串"""
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def mask_email(email):
-    """邮箱脱敏显示"""
+    """邮箱脱敏"""
     if "@" in email:
         local, domain = email.split("@", 1)
         return f"{local[:3]}***@{domain}"
@@ -94,15 +95,18 @@ def take_screenshot(driver, name):
     timestamp = datetime.now().strftime("%H%M%S")
     filename = os.path.join(SCREENSHOT_DIR, f"{timestamp}-{name}.png")
     try:
-        driver.save_screenshot(filename)
-        print(f"[INFO] 截图 → {filename}")
+        if driver is not None:
+            driver.save_screenshot(filename)
+            print(f"[INFO] 截图 → {filename}")
+        else:
+            print("[WARN] driver 为 None，跳过截图")
     except Exception as e:
         print(f"[WARN] 截图失败: {e}")
     return filename
 
 
 def parse_due_date(text):
-    """把页面显示的到期时间转成 YYYY-MM-DD"""
+    """把页面中的到期时间转换成 YYYY-MM-DD"""
     if not text:
         return None
 
@@ -123,7 +127,7 @@ def parse_due_date(text):
 
 def find_first(driver, selectors):
     """
-    按顺序查找第一个可见元素
+    依次查找第一个可见元素
     selectors: [(By.CSS_SELECTOR, "..."), (By.XPATH, "...")]
     """
     for by, value in selectors:
@@ -137,7 +141,7 @@ def find_first(driver, selectors):
 
 
 def wait_for_element_visible(driver, by, value, timeout=30, interval=0.5):
-    """轮询等待某元素可见"""
+    """轮询等待元素可见"""
     end = time.time() + timeout
     while time.time() < end:
         try:
@@ -151,7 +155,7 @@ def wait_for_element_visible(driver, by, value, timeout=30, interval=0.5):
 
 
 def wait_for_url_contains(driver, keyword, timeout=45):
-    """等待当前 URL 包含关键字"""
+    """等待 URL 包含某个关键字"""
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -164,7 +168,7 @@ def wait_for_url_contains(driver, keyword, timeout=45):
 
 
 def check_login_error(driver):
-    """检查登录页是否有错误提示"""
+    """检查登录页错误信息"""
     error_selectors = [
         (By.CSS_SELECTOR, ".text-red-500"),
         (By.CSS_SELECTOR, ".alert-danger"),
@@ -185,7 +189,7 @@ def check_login_error(driver):
 
 
 def get_current_due_date(driver):
-    """获取管理页的当前到期时间"""
+    """获取管理页到期时间"""
     try:
         due_elem = driver.find_element(
             By.XPATH, "//h6[contains(text(),'Due date')]/following-sibling::div"
@@ -198,7 +202,7 @@ def get_current_due_date(driver):
 
 
 def safe_quit(driver):
-    """尽量稳妥退出，避免 close/quit 失败把流程二次打断"""
+    """尽量安全地关闭浏览器"""
     if not driver:
         return
 
@@ -217,9 +221,9 @@ def safe_quit(driver):
 
 def open_url_safely(driver, url):
     """
-    保持你原来的 CF 访问方式：
-    1. 先尝试 uc_open_with_reconnect
-    2. 失败再回退到 driver.get
+    保持原有 CF 访问方式：
+    1. 优先 uc_open_with_reconnect
+    2. 失败后回退到 driver.get
     """
     try:
         if hasattr(driver, "uc_open_with_reconnect"):
@@ -237,19 +241,18 @@ def open_url_safely(driver, url):
 # =========================================================
 # 浏览器启动
 # =========================================================
-def build_driver(headless=False, xvfb=True):
+def build_driver(headless=False):
     """
     构建浏览器驱动
 
-    关键点：
-    - 保留 uc=True，保证你原本的 CF 行为不变
-    - 不使用 headless2，避免 Linux / GitHub Actions 下关闭窗口超时
-    - 优先 xvfb=True，适合 GitHub Actions
+    关键说明：
+    - 这里不再传 xvfb
+    - xvfb 由 GitHub Actions workflow 里的 xvfb-run 提供
+    - 保留 uc=True，确保 CF 相关逻辑不变
     """
     driver_kwargs = {
         "uc": True,
         "headless": headless,
-        "xvfb": xvfb,
         "user_data_dir": USER_DATA_DIR,
         "window_size": "1280,753",
         "disable_csp": True,
@@ -272,15 +275,15 @@ def build_driver(headless=False, xvfb=True):
 
 def start_driver_with_fallback():
     """
-    优先尝试：
-    1. 非 headless + xvfb
-    2. headless + 非 xvfb
+    启动浏览器，失败时做一次回退：
+    1. headless=False
+    2. headless=True
 
-    这样尽量不动 CF 逻辑，只解决 GitHub Actions 里窗口关闭/卡住问题。
+    GitHub Actions 中建议用 xvfb-run 包裹脚本，所以优先尝试非 headless。
     """
     configs = [
-        {"headless": False, "xvfb": True},
-        {"headless": True, "xvfb": False},
+        {"headless": False},
+        {"headless": True},
     ]
 
     last_error = None
@@ -288,13 +291,10 @@ def start_driver_with_fallback():
     for idx, cfg in enumerate(configs, start=1):
         driver = None
         try:
-            print(
-                f"[INFO] 尝试启动浏览器 #{idx} "
-                f"(headless={cfg['headless']}, xvfb={cfg['xvfb']})"
-            )
-            driver = build_driver(headless=cfg["headless"], xvfb=cfg["xvfb"])
+            print(f"[INFO] 尝试启动浏览器 #{idx} (headless={cfg['headless']})")
+            driver = build_driver(headless=cfg["headless"])
 
-            # 先试着打开一次主页，确认浏览器稳定可用
+            # 先试着打开主页，确认浏览器状态正常
             open_url_safely(driver, f"{BASE_URL}/dashboard")
             time.sleep(3)
             return driver
@@ -308,7 +308,7 @@ def start_driver_with_fallback():
 
 
 # =========================================================
-# 主逻辑
+# 主流程
 # =========================================================
 def main():
     print("[INFO] " + "=" * 50)
@@ -381,7 +381,7 @@ def main():
             take_screenshot(driver, "03-credentials-filled")
 
             # =========================================================
-            # CF 验证逻辑：保持原样，不改核心流程
+            # CF 验证逻辑：保持原样，不修改核心行为
             # =========================================================
             print("[INFO] ⏳ 等待 Turnstile 加载...")
             time.sleep(5)
@@ -537,7 +537,7 @@ def main():
             take_screenshot(driver, "10-renew-clicked")
 
             # -------------------------------------------------
-            # 6. 检测限制弹窗
+            # 检测限制弹窗
             # -------------------------------------------------
             time.sleep(1)
             restriction_h3 = ""
@@ -659,7 +659,7 @@ def main():
             raise
 
         # -------------------------------------------------
-        # 7. 获取续订后到期时间
+        # 6. 获取续订后到期时间
         # -------------------------------------------------
         open_url_safely(driver, manage_url)
         time.sleep(3)
@@ -675,7 +675,7 @@ def main():
             print(f"[INFO] 到期时间(标准): {due_date_after_raw}")
 
         # -------------------------------------------------
-        # 8. 判断结果
+        # 7. 判断结果
         # -------------------------------------------------
         if restricted and not renew_executed:
             result_status = "ℹ️ 暂无可续期"
@@ -692,7 +692,7 @@ def main():
             result_status = "❌ 续订失败"
 
         # -------------------------------------------------
-        # 9. 发送通知
+        # 8. 发送通知
         # -------------------------------------------------
         bj_time = get_bj_time()
 
