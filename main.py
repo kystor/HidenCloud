@@ -19,7 +19,7 @@ def take_screenshot(sb, account_index, step_name):
         pass
 
 # =========================================================
-# 处理 Cloudflare 整页 5 秒盾 (完全照搬你的完美逻辑)
+# 处理 Cloudflare 整页 5 秒盾 
 # =========================================================
 def is_cloudflare_interstitial(sb) -> bool:
     """检查当前页面是否是 Cloudflare 的 5 秒盾等待页"""
@@ -57,7 +57,7 @@ def bypass_cloudflare_interstitial(sb, max_attempts=3) -> bool:
     return False
 
 # =========================================================
-# 处理 Turnstile 组件 (完全照搬你的完美逻辑)
+# 处理 Turnstile 组件
 # =========================================================
 def handle_turnstile_verification(sb) -> bool:
     """综合处理登录页和弹窗中的 CF Turnstile 验证码"""
@@ -134,14 +134,14 @@ def handle_turnstile_verification(sb) -> bool:
     return True
 
 # =========================================================
-# 单个账号的处理主流程 (已针对 HidenCloud 修改网址和按钮)
+# 单个账号的处理主流程
 # =========================================================
 def process_account(account_index, username, password):
     with SB(uc=True, test=True, locale="en", chromium_arg="--disable-blink-features=AutomationControlled") as sb:
         
-        print(f"  [1/6] 🌐 访问 HidenCloud 登录页...")
-        # 【修改点1】将网址替换为 HidenCloud 的登录页
-        sb.uc_open_with_reconnect("https://panel.hidencloud.com/login", reconnect_time=8)
+        print(f"  [1/6] 🌐 访问 HidenCloud Dash 登录页...")
+        # 【修改点1】将网址替换为正确的 dash 面板地址
+        sb.uc_open_with_reconnect("https://dash.hidencloud.com/dashboard", reconnect_time=8)
         time.sleep(4)
         take_screenshot(sb, account_index, "01_访问初始页")
 
@@ -154,7 +154,6 @@ def process_account(account_index, username, password):
 
         print(f"  [2/6] 🔑 填写账号与密码...")
         try:
-            # 这里的输入框选择器通用于大多数登录页，保留不动
             sb.wait_for_element_visible('input[type="email"], input[type="text"]', timeout=10)
             sb.type('input[type="email"], input[type="text"]', username)
             sb.type('input[type="password"]', password)
@@ -169,12 +168,9 @@ def process_account(account_index, username, password):
 
         print(f"  [4/6] 🚀 提交登录...")
         try:
-            # 【修改点2】去掉了原脚本中特有的 `bg-emerald-600` 绿色按钮限制
-            # 改为通用的寻找 type="submit" 的提交按钮
             sb.click('button[type="submit"]')
         except:
             try:
-                # 备用方案：如果点不到按钮，直接回车提交表单
                 sb.execute_script('(function() { document.querySelector("form").submit(); })();')
             except Exception as e:
                 print(f"  ❌ 点击登录失败: {e}")
@@ -182,19 +178,15 @@ def process_account(account_index, username, password):
         time.sleep(6) 
         take_screenshot(sb, account_index, "04_提交登录后")
 
-        print(f"  [5/6] 📂 跳转至服务器面板页...")
-        # 【修改点3】登录成功后，跳转到 HidenCloud 的主面板 (通常是根目录)
-        sb.open("https://panel.hidencloud.com/")
+        print(f"  [5/6] 📂 跳转至服务器列表页...")
+        # 【修改点2】登录成功后，确保停留在 dashboard 页面
+        sb.open("https://dash.hidencloud.com/dashboard")
         time.sleep(5)
         take_screenshot(sb, account_index, "05_面板主页")
 
         print(f"  [6/6] 🔄 扫描并续期/重置...")
         try:
-            # 【注意】：由于我无法看到 HidenCloud 面板内部的结构
-            # 以下部分保留了原脚本的遍历逻辑，但我把关键词换成了通用的 "Renew"
-            # 如果服务器卡片点不进去，你需要根据截图修改这里的选择器 (例如改成提取 a 标签的 href 跳转)
-            
-            # 寻找页面上可能代表服务器卡片的元素（寻找包含文字的 h3 标题等）
+            # 寻找页面上可能代表服务器卡片的元素
             app_card_selector = "div.cursor-pointer, a[href*='/server/']" 
             
             if sb.is_element_visible(app_card_selector):
@@ -205,7 +197,7 @@ def process_account(account_index, username, password):
                 for i in range(app_count):
                     cards = sb.find_elements(app_card_selector)
                     current_card = cards[i]
-                    app_name = current_card.text.strip()[:10] # 取前几个字作为简称
+                    app_name = current_card.text.strip()[:10] 
                     
                     print(f"    ------------------------------------")
                     print(f"    📦 处理项目 ({i+1}/{app_count}): {app_name}")
@@ -215,7 +207,6 @@ def process_account(account_index, username, password):
                         time.sleep(4) 
                         take_screenshot(sb, account_index, f"06_{app_name}_详情页")
 
-                        # 【修改点4】将原先的 'Reset Timer' 改为寻找包含 'Renew' (续期) 的按钮
                         reset_btn_selector = "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'renew')]"
                         
                         if sb.is_element_visible(reset_btn_selector):
@@ -228,7 +219,6 @@ def process_account(account_index, username, password):
                             handle_turnstile_verification(sb)
                             take_screenshot(sb, account_index, f"08_{app_name}_验证后")
 
-                            # 尝试点击确认按钮
                             print(f"      🖱️ 确认续期...")
                             sb.execute_script('''
                                 (function() {
@@ -250,7 +240,8 @@ def process_account(account_index, username, password):
                         print(f"      ⚠️ 点击卡片或续期报错: {inner_e}")
                     
                     print(f"      🔙 返回列表页...")
-                    sb.open("https://panel.hidencloud.com/")
+                    # 【修改点3】处理完一个项目后，退回到正确的 dashboard 地址
+                    sb.open("https://dash.hidencloud.com/dashboard")
                     time.sleep(5)
 
             else:
@@ -266,8 +257,6 @@ def process_account(account_index, username, password):
 # 程序入口点
 # =========================================================
 def main():
-    # 为了方便新手本地测试，如果你没有设置环境变量，这里直接写死一个测试账号
-    # 实际部署时，它依然会优先读取环境变量 TEST_ACCOUNTS
     accounts_str = os.environ.get("TEST_ACCOUNTS", "你的邮箱@outlook.com:你的密码")
     
     if not accounts_str:
