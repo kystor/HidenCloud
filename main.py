@@ -169,7 +169,7 @@ def open_url_safely(driver, url):
         raise
 
 def build_driver(headless=False):
-    # 配置浏览器启动参数，加入防崩溃设置
+    # 配置浏览器启动参数，去掉了报错的 disable_dev_shm_usage
     driver_kwargs = {
         "uc": True,
         "headless": headless,
@@ -177,7 +177,6 @@ def build_driver(headless=False):
         "disable_csp": True,
         "no_sandbox": True,             # 修复 Linux 服务器沙盒权限问题导致的崩溃
         "disable_gpu": True,            # 禁用服务器不支持的 GPU 加速
-        "disable_dev_shm_usage": True,  # 修复服务器共享内存不足导致的崩溃
         "agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
