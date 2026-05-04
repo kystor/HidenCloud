@@ -37,7 +37,7 @@
 ### ⚙️ REPO_TOKEN 权限要求
 
 - `REPO_TOKEN` 必须是 **Personal Access Token (Classic)**，且创建时务必勾选 **`repo`** 和 **`workflow`** 两项权限，否则将无法自动更新工作流中的 Cron 定时规则。
-- 获取路径：GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)  
+- 获取路径：GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)  → Generate new token → Generate new token (classic)
   如不需要自动调整 Cron，可在编辑工作流文件后移除相关步骤，此时可省略该 Secret。
 
 ### HIDENCLOUD 格式
