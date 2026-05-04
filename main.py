@@ -24,7 +24,6 @@ if "-----" in HIDENCLOUD:
 else:
     raise ValueError("❌ HIDENCLOUD 格式错误，应为 email-----password")
 
-
 def get_bj_time():
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -170,11 +169,15 @@ def open_url_safely(driver, url):
         raise
 
 def build_driver(headless=False):
+    # 配置浏览器启动参数，加入防崩溃设置
     driver_kwargs = {
         "uc": True,
         "headless": headless,
         "user_data_dir": USER_DATA_DIR,
         "disable_csp": True,
+        "no_sandbox": True,             # 修复 Linux 服务器沙盒权限问题导致的崩溃
+        "disable_gpu": True,            # 禁用服务器不支持的 GPU 加速
+        "disable_dev_shm_usage": True,  # 修复服务器共享内存不足导致的崩溃
         "agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -198,7 +201,7 @@ def start_driver_with_fallback():
         driver = None
         try:
             print(f"[INFO] 尝试启动浏览器 #{idx} (headless={cfg['headless']})")
-            driver = build_driver(headless=cfg["headless"])
+            driver = build_driver(headless=cfg['headless'])
             open_url_safely(driver, f"{BASE_URL}/dashboard")
             time.sleep(3)
             return driver
