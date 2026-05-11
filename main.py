@@ -202,17 +202,18 @@ def process_account(account_index, username, password):
                                 print(f"      🖱️ 1. 成功找到 [Renew] 续期按钮，准备点击...")
                                 sb.click(renew_btn_selector)
                                 
-                                # =========================================================
-                                # 【流程二】点击 Create Invoice 并等待跳转（只提交一次）
-                                # =========================================================
                                 time.sleep(3)
                                 take_screenshot(sb, account_index, f"07_ID_{sid}_唤出弹窗")
-                                
                                 handle_turnstile_verification(sb)
                                 
-                                print(f"      🖱️ 2. 点击 ID 为 {sid} 的 [Create Invoice] 按钮...")
+                                # =========================================================
+                                # 【流程二】修复：强制 UC 点击，自动处理隐形验证
+                                # =========================================================
+                                print(f"      🖱️ 2. 对 ID 为 {sid} 的 [Create Invoice] 执行强制 UC 点击...")
                                 
-                                create_invoice_btn = f"button[data-modal-hide='renewService-{sid}']"
+                                # 使用更精准的 CSS 选择器，避免 data-modal-hide 干扰
+                                create_invoice_btn = f"#renewService-{sid} button[type='submit']"
+                                
                                 try:
                                     sb.wait_for_element_visible(create_invoice_btn, timeout=10)
                                 except:
@@ -222,20 +223,17 @@ def process_account(account_index, username, password):
                                     time.sleep(5)
                                     continue
                                 
-                                # 只做一次物理点击，不附加任何 JS 强制提交
-                                sb.click(create_invoice_btn)
+                                # 核心修复：使用 uc_click 模拟真实点击，自动处理隐形 CF 挑战
+                                sb.uc_click(create_invoice_btn)
                                 
-                                # 密集截图记录点击后的页面变化
-                                print(f"      📸 记录点击后的页面状态...")
-                                take_screenshot(sb, account_index, f"07_01_ID_{sid}_点击后瞬间")
-                                for step in range(1, 4):
-                                    time.sleep(2)
-                                    take_screenshot(sb, account_index, f"07_01_ID_{sid}_点击后_{step * 2}秒")
+                                # 给足时间让页面完成跳转（包括可能的验证）
+                                time.sleep(8)
+                                take_screenshot(sb, account_index, f"07_01_ID_{sid}_UC点击后8秒")
                                 
                                 # =========================================================
-                                # 【流程三】等待跳转至支付页
+                                # 【流程三】等待支付页面
                                 # =========================================================
-                                print(f"      ⏳ 3. 等待页面跳转至支付页 (最多20秒)...")
+                                print(f"      ⏳ 3. 等待页面跳转至支付页...")
                                 
                                 pay_btn_selector = "//button[@type='submit' and contains(normalize-space(), 'Pay')]"
                                 
@@ -250,7 +248,7 @@ def process_account(account_index, username, password):
                                     take_screenshot(sb, account_index, f"09_ID_{sid}_支付完成")
                                     print(f"      ✨ 服务器 {sid} 续期并支付完成！")
                                     
-                                except Exception as e:
+                                except Exception:
                                     current_url = sb.get_current_url()
                                     if "invoice" in current_url.lower() or "payment" in current_url.lower():
                                         print(f"      ⚠️ 页面已跳转但未定位到 Pay 按钮，URL: {current_url}")
@@ -259,11 +257,12 @@ def process_account(account_index, username, password):
                                         print(f"      ❌ 未跳转到支付页，停留在: {current_url}")
                                         take_screenshot(sb, account_index, f"98_ID_{sid}_未跳转")
                                 
-                                # 假设续费成功，加30天
+                                # 假设续费成功后延长30天，更新最早到期日期
                                 earliest_date_for_account = due_date + timedelta(days=30)
                             else:
                                 print(f"      ℹ️ 管理页未找到续期按钮。请检查截图。")
                                 
+                            # 返回仪表盘准备处理下一台服务器
                             sb.open("https://dash.hidencloud.com/dashboard")
                             time.sleep(5)
                         else:
