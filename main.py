@@ -235,19 +235,26 @@ def process_account(account_index, username, password):
                                 
                                 print(f"      🖱️ 2. 确认续期弹窗，精准点击 ID为 {sid} 的 [Create Invoice]...")
                                 
-                                # 【核心修改点】
-                                # 使用 f-string 将变量 sid 拼接到 CSS 选择器中。
-                                # 这样就能精准锁定当前正在处理的这台服务器的专属弹窗按钮，绝不会误点其他的。
+                                # 精准锁定当前服务器的弹窗按钮
                                 create_invoice_btn = f"button[data-modal-hide='renewService-{sid}']"
-                                
-                                # 等待这个特定的按钮在页面上变为可见状态（最多等10秒）
                                 sb.wait_for_element_visible(create_invoice_btn, timeout=10)
                                 
-                                # 【核心修改点】
-                                # 放弃普通的 sb.click()，改用 sb.js_click()。
-                                # js_click 是通过浏览器底层执行 JavaScript 强制点击元素，
-                                # 对于这种带有弹窗动画、可能存在图层遮挡的情况，js_click 成功率极高，是防报错的神器。
+                                # 用 JS 强力点击
                                 sb.js_click(create_invoice_btn)
+                                
+                                # =========================================================
+                                # 【新增：诊断排查专用】点击后瞬间及每2秒截图一次
+                                # =========================================================
+                                print(f"      📸 开始密集截图排查，追踪点击后的页面变化...")
+                                
+                                # 记录点击后的第一瞬间
+                                take_screenshot(sb, account_index, f"07_01_ID_{sid}_点击后瞬间")
+                                
+                                # 循环 5 次，每次等待 2 秒并截图（总共记录接下来的 10 秒过程）
+                                # 这能帮我们看清到底是弹窗关了没反应，还是后台在加载，或者是被拦截了
+                                for step in range(1, 6):
+                                    time.sleep(2)
+                                    take_screenshot(sb, account_index, f"07_01_ID_{sid}_点击后_{step * 2}秒")
                                 
                                 # =========================================================
                                 # 【流程三】极致防崩版：直接死等 Pay 按钮
@@ -257,7 +264,7 @@ def process_account(account_index, username, password):
                                 pay_btn_selector = "//button[@type='submit' and contains(normalize-space(), 'Pay')]"
                                 
                                 try:
-                                    # 给它足足 20 秒的时间去跳转、过 CF 验证、加载支付页
+                                    # 给它足足 20 秒的时间去跳转
                                     sb.wait_for_element_visible(pay_btn_selector, timeout=20)
                                     take_screenshot(sb, account_index, f"08_ID_{sid}_支付确认页")
                                     
@@ -269,7 +276,7 @@ def process_account(account_index, username, password):
                                     print(f"      ✨ 服务器 {sid} 续期且支付操作完美结束！")
                                     
                                 except Exception as e:
-                                    # 如果找不到 Pay 按钮，打印提示，但不再让脚本崩溃退出
+                                    # 没找到就截图保存现场
                                     print(f"      ❌ 未能在规定时间内找到 Pay 按钮，或发生异常。")
                                     take_screenshot(sb, account_index, f"98_ID_{sid}_寻找Pay失败")
                                 
