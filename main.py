@@ -235,7 +235,8 @@ def process_account(account_index, username, password):
                                 # =========================================================
                                 print(f"      ⏳ 3. 等待页面跳转至支付页...")
                                 
-                                pay_btn_selector = "//button[@type='submit' and contains(normalize-space(), 'Pay')]"
+                                # 修正后的选择器，直接匹配 submit 类型按钮
+                                pay_btn_selector = "button[type='submit']"
                                 
                                 try:
                                     sb.wait_for_element_visible(pay_btn_selector, timeout=20)
