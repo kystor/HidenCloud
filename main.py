@@ -207,11 +207,10 @@ def process_account(account_index, username, password):
                                 handle_turnstile_verification(sb)
                                 
                                 # =========================================================
-                                # 【流程二】修复：强制 UC 点击，自动处理隐形验证
+                                # 【流程二】强制 UC 点击 Create Invoice
                                 # =========================================================
                                 print(f"      🖱️ 2. 对 ID 为 {sid} 的 [Create Invoice] 执行强制 UC 点击...")
                                 
-                                # 使用更精准的 CSS 选择器，避免 data-modal-hide 干扰
                                 create_invoice_btn = f"#renewService-{sid} button[type='submit']"
                                 
                                 try:
@@ -223,19 +222,18 @@ def process_account(account_index, username, password):
                                     time.sleep(5)
                                     continue
                                 
-                                # 核心修复：使用 uc_click 模拟真实点击，自动处理隐形 CF 挑战
+                                # 核心：使用 uc_click 处理隐形 CF 验证
                                 sb.uc_click(create_invoice_btn)
                                 
-                                # 给足时间让页面完成跳转（包括可能的验证）
-                                time.sleep(8)
-                                take_screenshot(sb, account_index, f"07_01_ID_{sid}_UC点击后8秒")
+                                # 简短等待 + 截图（仅用于确认）
+                                time.sleep(2)
+                                take_screenshot(sb, account_index, f"07_01_ID_{sid}_UC点击后2秒")
                                 
                                 # =========================================================
-                                # 【流程三】等待支付页面
+                                # 【流程三】等待支付页面出现
                                 # =========================================================
                                 print(f"      ⏳ 3. 等待页面跳转至支付页...")
                                 
-                                # 修正后的选择器，直接匹配 submit 类型按钮
                                 pay_btn_selector = "button[type='submit']"
                                 
                                 try:
@@ -249,6 +247,38 @@ def process_account(account_index, username, password):
                                     take_screenshot(sb, account_index, f"09_ID_{sid}_支付完成")
                                     print(f"      ✨ 服务器 {sid} 续期并支付完成！")
                                     
+                                    # =========================================================
+                                    # 【流程四】重新加载仪表盘，获取实际最新到期时间
+                                    # =========================================================
+                                    print(f"      🔄 返回仪表盘，重新获取服务器最新到期时间...")
+                                    sb.open("https://dash.hidencloud.com/dashboard")
+                                    time.sleep(5)
+                                    take_screenshot(sb, account_index, f"10_ID_{sid}_续期后仪表盘")
+                                    
+                                    # 重新解析所有服务器，更新最早到期日期
+                                    if sb.is_element_visible(rows_selector):
+                                        new_elements = sb.find_elements(rows_selector)
+                                        print(f"    📊 续期后扫描到 {len(new_elements)} 台服务器：")
+                                        new_earliest = None
+                                        for idx in range(len(new_elements)):
+                                            row = sb.find_elements(rows_selector)[idx]
+                                            row_text = row.text
+                                            sid_m = re.search(r'#(\d+)', row_text)
+                                            date_m = re.search(r'(\d{2}\s+[A-Za-z]{3}\s+\d{4})', row_text)
+                                            if sid_m and date_m:
+                                                new_sid = sid_m.group(1)
+                                                new_due_str = date_m.group(1)
+                                                new_due_date = datetime.strptime(new_due_str, "%d %b %Y")
+                                                if not new_earliest or new_due_date < new_earliest:
+                                                    new_earliest = new_due_date
+                                                print(f"      📦 服务器 #{new_sid}: 到期时间 {new_due_str}")
+                                        if new_earliest:
+                                            earliest_date_for_account = new_earliest
+                                            print(f"    🎯 更新账号最早到期时间为: {earliest_date_for_account.strftime('%d %b %Y')}")
+                                    
+                                    # 完成续期，跳出循环（不再处理当前账号的其他服务器）
+                                    break
+                                    
                                 except Exception:
                                     current_url = sb.get_current_url()
                                     if "invoice" in current_url.lower() or "payment" in current_url.lower():
@@ -257,13 +287,10 @@ def process_account(account_index, username, password):
                                     else:
                                         print(f"      ❌ 未跳转到支付页，停留在: {current_url}")
                                         take_screenshot(sb, account_index, f"98_ID_{sid}_未跳转")
-                                
-                                # 假设续费成功后延长30天，更新最早到期日期
-                                earliest_date_for_account = due_date + timedelta(days=30)
                             else:
                                 print(f"      ℹ️ 管理页未找到续期按钮。请检查截图。")
                                 
-                            # 返回仪表盘准备处理下一台服务器
+                            # 若未成功续期，也回到仪表盘，继续检查下一台（如果有）
                             sb.open("https://dash.hidencloud.com/dashboard")
                             time.sleep(5)
                         else:
