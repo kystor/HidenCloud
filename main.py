@@ -201,55 +201,49 @@ def process_account(account_index, username, password):
                                 sb.click(renew_btn_selector)
                                 
                                 # =========================================================
-                                # 【流程二】强力修复版：点击 Create Invoice
+                                # 【流程二】稳健版：点击 Create Invoice
                                 # =========================================================
-                                # 给予弹窗弹出动画充足的时间，防止点空
-                                time.sleep(3)  
+                                time.sleep(3)  # 给足弹窗弹出的动画时间
                                 take_screenshot(sb, account_index, f"07_ID_{sid}_唤出弹窗")
                                 
                                 handle_turnstile_verification(sb)
                                 
-                                print(f"      🖱️ 2. 确认续期弹窗，尝试强力点击 [Create Invoice]...")
-                                
-                                # 直接通过按钮上的文字寻找，最直观准确！
+                                print(f"      🖱️ 2. 确认续期弹窗，点击 [Create Invoice]...")
                                 create_invoice_btn = "//button[contains(normalize-space(), 'Create Invoice')]"
                                 
-                                # 确保按钮可以点击
-                                sb.wait_for_element_clickable(create_invoice_btn, timeout=10)
-                                
-                                # 使用 JavaScript 原生点击（绝招！能无视网页上的各种遮挡物）
-                                sb.js_click(create_invoice_btn)
+                                # 确保按钮可见后，执行普通的点击（比强力点击更符合真实用户行为，不易崩）
+                                sb.wait_for_element_visible(create_invoice_btn, timeout=10)
+                                sb.click(create_invoice_btn)
                                 
                                 # =========================================================
-                                # 【流程三】等待页面跳转并点击 Pay 完成支付
+                                # 【流程三】极致防崩版：直接死等 Pay 按钮
                                 # =========================================================
-                                print(f"      ⏳ 3. 等待页面跳转至支付页...")
-                                time.sleep(6) # 给网页留出充足的时间跳转并加载
-                                
-                                # 获取当前所有打开的窗口句柄 (防止支付页在新标签打开)
-                                windows = sb.driver.window_handles
-                                if len(windows) > 1:
-                                    print(f"      🔀 检测到新窗口，正在切换...")
-                                    sb.driver.switch_to.window(windows[-1])
-                                
-                                take_screenshot(sb, account_index, f"08_ID_{sid}_支付确认页")
-                                print(f"      🖱️ 4. 寻找并点击 [Pay] 支付按钮...")
+                                print(f"      ⏳ 3. 等待页面跳转至支付页 (可能需要几秒到十几秒)...")
                                 
                                 pay_btn_selector = "//button[@type='submit' and contains(normalize-space(), 'Pay')]"
                                 
-                                # 等待支付按钮出现，并同样使用强力点击
-                                sb.wait_for_element_visible(pay_btn_selector, timeout=15)
-                                sb.js_click(pay_btn_selector)
-                                
-                                time.sleep(5) # 等待支付成功的反馈页面
-                                take_screenshot(sb, account_index, f"09_ID_{sid}_全流程完成")
-                                print(f"      ✨ 服务器 {sid} 续期且支付操作完美结束！")
+                                try:
+                                    # 给它足足 20 秒的时间去跳转、过 CF 验证、加载支付页
+                                    sb.wait_for_element_visible(pay_btn_selector, timeout=20)
+                                    take_screenshot(sb, account_index, f"08_ID_{sid}_支付确认页")
+                                    
+                                    print(f"      🖱️ 4. 成功找到 [Pay] 支付按钮，执行点击...")
+                                    sb.click(pay_btn_selector)
+                                    
+                                    time.sleep(5) # 等待支付成功的反馈页面
+                                    take_screenshot(sb, account_index, f"09_ID_{sid}_全流程完成")
+                                    print(f"      ✨ 服务器 {sid} 续期且支付操作完美结束！")
+                                    
+                                except Exception as e:
+                                    # 如果找不到 Pay 按钮，打印提示，但不再让脚本崩溃退出
+                                    print(f"      ❌ 未能在规定时间内找到 Pay 按钮，或发生异常。")
+                                    take_screenshot(sb, account_index, f"98_ID_{sid}_寻找Pay失败")
                                 
                                 earliest_date_for_account = due_date + timedelta(days=30) 
                             else:
                                 print(f"      ℹ️ 管理页未找到续期按钮。请检查截图：06_ID_{sid}_管理页.png")
                                 
-                            # 跑完当前服务器后，回到主面板继续检查下一台
+                            # 无论续费成功还是失败，都稳稳地回到主面板准备检查下一台服务器
                             sb.open("https://dash.hidencloud.com/dashboard")
                             time.sleep(5)
                         else:
