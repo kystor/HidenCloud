@@ -191,9 +191,19 @@ def process_account(account_index, username, password):
                             time.sleep(5)
                             take_screenshot(sb, account_index, f"06_ID_{sid}_管理页")
                             
-                            renew_btn_selector = "button[onclick*='showRenewAlert']"
+                            # =========================================================
+                            # 【新手引导】核心修复区域：更换查找按钮的规则
+                            # =========================================================
+                            # 原理讲解：网页中的按钮属性是 data-modal-target="renewService-212500"
+                            # 我们不能把 "212500" 写死在代码里，因为每台服务器的 ID 都不一样。
+                            # 在 CSS 选择器中，符号 `^=` 代表“以某个文本开头”。
+                            # 所以 `button[data-modal-target^='renewService-']` 的意思是：
+                            # 寻找任何一个 button 标签，只要它的 data-modal-target 属性是以 'renewService-' 开头的，就把它抓出来！
+                            # 这样脚本就变得非常智能，能够适应各种不同的服务器 ID 了。
+                            renew_btn_selector = "button[data-modal-target^='renewService-']"
+                            
                             if sb.is_element_visible(renew_btn_selector):
-                                print(f"      🖱️ 点击 [Renew] 续期按钮...")
+                                print(f"      🖱️ 成功找到 [Renew] 续期按钮，准备点击...")
                                 sb.click(renew_btn_selector)
                                 time.sleep(3)  
                                 take_screenshot(sb, account_index, f"07_ID_{sid}_点击弹窗")
@@ -220,7 +230,7 @@ def process_account(account_index, username, password):
                                 
                                 earliest_date_for_account = due_date + timedelta(days=30) 
                             else:
-                                print(f"      ℹ️ 管理页未找到续期按钮。")
+                                print(f"      ℹ️ 管理页未找到续期按钮。请检查截图：06_ID_{sid}_管理页.png")
                                 
                             sb.open("https://dash.hidencloud.com/dashboard")
                             time.sleep(5)
@@ -303,6 +313,10 @@ def update_github_workflow_cron(global_earliest_date):
                     os.system(f'git remote set-url origin https://x-access-token:{repo_token}@github.com/{github_repo}.git')
                     os.system(f'git add {target_file}')
                     os.system('git commit -m "🔄 自动更新下次续期时间 [skip ci]"')
+                    
+                    # 【新手引导】
+                    # 如果你在 GitHub Actions 中运行到这里报错 "! [remote rejected]"，
+                    # 记得去检查你的 GitHub Token 是否勾选了 `workflow` (读写工作流文件) 的权限。
                     os.system('git push')
                     print("  🌟 GitHub 仓库时间线已成功更新！")
         else:
