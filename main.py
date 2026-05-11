@@ -226,7 +226,7 @@ def process_account(account_index, username, password):
                                 sb.click(renew_btn_selector)
                                 
                                 # =========================================================
-                                # 【流程二】优化版：精准定位专属ID并点击 Create Invoice
+                                # 【流程二】终极修复版：物理点击 + 表单强制提交兜底
                                 # =========================================================
                                 time.sleep(3)  # 等待3秒，确保弹窗动画完全结束且元素加载完毕
                                 take_screenshot(sb, account_index, f"07_ID_{sid}_唤出弹窗")
@@ -239,25 +239,31 @@ def process_account(account_index, username, password):
                                 create_invoice_btn = f"button[data-modal-hide='renewService-{sid}']"
                                 sb.wait_for_element_visible(create_invoice_btn, timeout=10)
                                 
-                                # 用 JS 强力点击
-                                sb.js_click(create_invoice_btn)
+                                # 【修复点 1：改回真实物理点击】
+                                # 物理点击才能正常触发前端框架绑定的 submit 事件，从而弹出成功提示并跳转
+                                sb.click(create_invoice_btn)
                                 
-                                # =========================================================
-                                # 【新增：诊断排查专用】点击后瞬间及每2秒截图一次
-                                # =========================================================
+                                # 【修复点 2：增加表单强制提交的兜底方案】
+                                # 如果因为某些玄学原因物理点击还是没提交表单，我们用 JS 直接选中按钮所在的表单并提交
+                                try:
+                                    sb.execute_script(f"""
+                                        var btn = document.querySelector("button[data-modal-hide='renewService-{sid}']");
+                                        if(btn && btn.form) {{
+                                            btn.form.submit();
+                                        }}
+                                    """)
+                                except:
+                                    pass
+                                
+                                # 密集截图排查功能保留，方便你观察点击后的跳转情况
                                 print(f"      📸 开始密集截图排查，追踪点击后的页面变化...")
-                                
-                                # 记录点击后的第一瞬间
                                 take_screenshot(sb, account_index, f"07_01_ID_{sid}_点击后瞬间")
-                                
-                                # 循环 5 次，每次等待 2 秒并截图（总共记录接下来的 10 秒过程）
-                                # 这能帮我们看清到底是弹窗关了没反应，还是后台在加载，或者是被拦截了
-                                for step in range(1, 6):
+                                for step in range(1, 4): # 次数减少到3次，避免截图太多
                                     time.sleep(2)
                                     take_screenshot(sb, account_index, f"07_01_ID_{sid}_点击后_{step * 2}秒")
                                 
                                 # =========================================================
-                                # 【流程三】极致防崩版：直接死等 Pay 按钮
+                                # 【流程三】等待跳转并点击 Pay
                                 # =========================================================
                                 print(f"      ⏳ 3. 等待页面跳转至支付页 (可能需要几秒到十几秒)...")
                                 
