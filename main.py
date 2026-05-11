@@ -191,31 +191,52 @@ def process_account(account_index, username, password):
                             time.sleep(5)
                             take_screenshot(sb, account_index, f"06_ID_{sid}_管理页")
                             
-                            # 第一步：点击绿色的 Renew 唤出弹窗
+                            # =========================================================
+                            # 【流程一】点击绿色的 Renew 唤出弹窗
+                            # =========================================================
                             renew_btn_selector = "button[data-modal-target^='renewService-']"
                             
                             if sb.is_element_visible(renew_btn_selector):
-                                print(f"      🖱️ 成功找到 [Renew] 续期按钮，准备点击...")
+                                print(f"      🖱️ 1. 成功找到 [Renew] 续期按钮，准备点击...")
                                 sb.click(renew_btn_selector)
                                 time.sleep(3)  
-                                take_screenshot(sb, account_index, f"07_ID_{sid}_点击弹窗")
+                                take_screenshot(sb, account_index, f"07_ID_{sid}_唤出弹窗")
                                 
                                 handle_turnstile_verification(sb)
                                 
-                                # 第二步：在弹窗中点击 Create Invoice 确认续期
-                                print(f"      🖱️ 确认续期弹窗，点击 [Create Invoice]...")
+                                # =========================================================
+                                # 【流程二】在弹窗中点击 Create Invoice 确认创建账单
+                                # =========================================================
+                                print(f"      🖱️ 2. 确认续期弹窗，点击 [Create Invoice]...")
                                 confirm_btn_selector = f"button[data-modal-hide='renewService-{sid}']"
                                 sb.wait_for_element_visible(confirm_btn_selector, timeout=10)
                                 sb.click(confirm_btn_selector)
                                 
-                                time.sleep(4) 
-                                take_screenshot(sb, account_index, f"08_ID_{sid}_续期完成")
-                                print(f"      ✨ 服务器 {sid} 续期操作完成！")
+                                # =========================================================
+                                # 【流程三】等待页面跳转并点击 Pay 完成支付 (新增步骤)
+                                # =========================================================
+                                print(f"      ⏳ 3. 等待页面跳转至支付页...")
+                                time.sleep(4) # 给网页留出充足的时间跳转并加载
+                                
+                                take_screenshot(sb, account_index, f"08_ID_{sid}_支付确认页")
+                                print(f"      🖱️ 4. 寻找并点击 [Pay] 支付按钮...")
+                                
+                                # 使用 normalize-space() 清除 HTML 里的换行和空格，精准定位带有 Pay 文字的按钮
+                                pay_btn_selector = "//button[@type='submit' and contains(normalize-space(), 'Pay')]"
+                                
+                                # 等待支付按钮出现，并点击
+                                sb.wait_for_element_visible(pay_btn_selector, timeout=15)
+                                sb.click(pay_btn_selector)
+                                
+                                time.sleep(5) # 等待支付成功的反馈页面
+                                take_screenshot(sb, account_index, f"09_ID_{sid}_全流程完成")
+                                print(f"      ✨ 服务器 {sid} 续期且支付操作完美结束！")
                                 
                                 earliest_date_for_account = due_date + timedelta(days=30) 
                             else:
                                 print(f"      ℹ️ 管理页未找到续期按钮。请检查截图：06_ID_{sid}_管理页.png")
                                 
+                            # 跑完当前服务器后，回到主面板继续检查下一台
                             sb.open("https://dash.hidencloud.com/dashboard")
                             time.sleep(5)
                         else:
