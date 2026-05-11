@@ -191,15 +191,7 @@ def process_account(account_index, username, password):
                             time.sleep(5)
                             take_screenshot(sb, account_index, f"06_ID_{sid}_管理页")
                             
-                            # =========================================================
-                            # 【新手引导】核心修复区域：更换查找按钮的规则
-                            # =========================================================
-                            # 原理讲解：网页中的按钮属性是 data-modal-target="renewService-212500"
-                            # 我们不能把 "212500" 写死在代码里，因为每台服务器的 ID 都不一样。
-                            # 在 CSS 选择器中，符号 `^=` 代表“以某个文本开头”。
-                            # 所以 `button[data-modal-target^='renewService-']` 的意思是：
-                            # 寻找任何一个 button 标签，只要它的 data-modal-target 属性是以 'renewService-' 开头的，就把它抓出来！
-                            # 这样脚本就变得非常智能，能够适应各种不同的服务器 ID 了。
+                            # 第一步：点击绿色的 Renew 唤出弹窗
                             renew_btn_selector = "button[data-modal-target^='renewService-']"
                             
                             if sb.is_element_visible(renew_btn_selector):
@@ -210,20 +202,12 @@ def process_account(account_index, username, password):
                                 
                                 handle_turnstile_verification(sb)
                                 
-                                print(f"      🖱️ 确认续期弹窗...")
-                                sb.execute_script('''
-                                    (function() {
-                                        var btns = document.querySelectorAll('button');
-                                        for(var i=0; i<btns.length; i++) {
-                                            var t = btns[i].innerText.toLowerCase();
-                                            var c = btns[i].className.toLowerCase();
-                                            if(t.includes('confirm') || t.includes('yes') || t.includes('ok') || c.includes('confirm')) {
-                                                btns[i].click();
-                                                break;
-                                            }
-                                        }
-                                    })();
-                                ''')
+                                # 第二步：在弹窗中点击 Create Invoice 确认续期
+                                print(f"      🖱️ 确认续期弹窗，点击 [Create Invoice]...")
+                                confirm_btn_selector = f"button[data-modal-hide='renewService-{sid}']"
+                                sb.wait_for_element_visible(confirm_btn_selector, timeout=10)
+                                sb.click(confirm_btn_selector)
+                                
                                 time.sleep(4) 
                                 take_screenshot(sb, account_index, f"08_ID_{sid}_续期完成")
                                 print(f"      ✨ 服务器 {sid} 续期操作完成！")
@@ -313,10 +297,6 @@ def update_github_workflow_cron(global_earliest_date):
                     os.system(f'git remote set-url origin https://x-access-token:{repo_token}@github.com/{github_repo}.git')
                     os.system(f'git add {target_file}')
                     os.system('git commit -m "🔄 自动更新下次续期时间 [skip ci]"')
-                    
-                    # 【新手引导】
-                    # 如果你在 GitHub Actions 中运行到这里报错 "! [remote rejected]"，
-                    # 记得去检查你的 GitHub Token 是否勾选了 `workflow` (读写工作流文件) 的权限。
                     os.system('git push')
                     print("  🌟 GitHub 仓库时间线已成功更新！")
         else:
