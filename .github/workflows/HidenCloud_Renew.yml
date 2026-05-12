@@ -3,7 +3,7 @@ name: HidenCloud 核心自动续期
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'          # 初始占位，会被自动更新
+    - cron: '13 3 14 5 *'   # 自动更新下次运行时间
 
 permissions:
   contents: write
