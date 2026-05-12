@@ -40,6 +40,16 @@ jobs:
         if: success()
         run: |
           DUE_DATE=$(grep -oP '到期时间\(标准\): \K\d{4}-\d{2}-\d{2}' renew.log | tail -1 || echo "")
+          # ---------- 新增：识别 UNKNOWN 标记 ----------
+          if [ -z "$DUE_DATE" ]; then
+            UNKNOWN_CHECK=$(grep -oP '到期时间\(标准\): \KUNKNOWN' renew.log | tail -1 || echo "")
+            if [ "$UNKNOWN_CHECK" = "UNKNOWN" ]; then
+              echo "skip_update=true" >> $GITHUB_OUTPUT
+              echo "::warning::脚本无法解析到期日期，跳过 Cron 更新"
+              exit 0
+            fi
+          fi
+          # ---------- 结束新增 ----------
           if [ -z "$DUE_DATE" ]; then
             echo "skip_update=true" >> $GITHUB_OUTPUT
             echo "::warning::未能提取到期时间，跳过 Cron 更新"
