@@ -291,26 +291,20 @@ def main():
             print(f"❌ 崩溃异常: {e}")
         time.sleep(5)
 
-    # ====== 新增：计算下次 cron 并输出给 Actions ======
+    # ====== 🔁 新：输出标准到期时间，供 Actions 提取 ======
     print("\n" + "=" * 50)
     print("⚙️ 计算下次调度时间...")
     if global_earliest_date:
         now = datetime.utcnow()
         time_left = global_earliest_date - now
         hours_left = time_left.total_seconds() / 3600
-        run_in_hours = hours_left - 20
-        if run_in_hours <= 0:
-            run_in_hours = 4  # 保底
-        next_run = now + timedelta(hours=run_in_hours)
-        new_cron = f"{next_run.minute} {next_run.hour} {next_run.day} {next_run.month} *"
         print(f"  ⏰ 最早到期: {global_earliest_date.strftime('%Y-%m-%d %H:%M')} UTC")
-        print(f"  📅 下次运行: {next_run.strftime('%Y-%m-%d %H:%M')} UTC")
+        print(f"  ⏳ 距离到期: {hours_left:.1f} 小时")
+        # ✅ 固定格式输出，用于 grep 提取
+        print(f"到期时间(标准): {global_earliest_date.strftime('%Y-%m-%d')}")
     else:
-        new_cron = "0 0 * * *"
-        print("  ⚠️ 无服务器日期，回退每天 0 点运行")
-    
-    # 关键：输出特殊标记行，供 YAML 捕获
-    print(f"NEXT_CRON={new_cron}")
+        print("  ⚠️ 无服务器日期")
+        print("到期时间(标准): 无")
     print("=" * 50)
 
 if __name__ == "__main__":
