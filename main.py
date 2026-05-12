@@ -1,463 +1,317 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
-import re
 import time
-import requests
-from datetime import datetime, timezone, timedelta
-from seleniumbase import Driver
+import re
+from datetime import datetime, timedelta
+from seleniumbase import SB
 
-# ====================== 配置区域 ======================
-HIDENCLOUD = os.getenv("HIDENCLOUD", "")
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
-PROXY_SERVER = os.getenv("PROXY_SERVER", "")
-
-if "-----" in HIDENCLOUD:
-    HIDEN_EMAIL, HIDEN_PWD = HIDENCLOUD.split("-----", 1)
-else:
-    raise ValueError("❌ HIDENCLOUD 格式错误，应为 email-----password")
-
-BASE_URL = "https://dash.hidencloud.com"
-STATE_DIR = "browser_state"
+# =========================================================
+# 准备工作：设置截图保存的文件夹
+# =========================================================
 SCREENSHOT_DIR = "screenshots"
+if not os.path.exists(SCREENSHOT_DIR):
+    os.makedirs(SCREENSHOT_DIR)
 
-os.makedirs(STATE_DIR, exist_ok=True)
-os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-
-USER_DATA_DIR = os.path.abspath(os.path.join(STATE_DIR, "selenium_profile"))
-
-
-# ====================== 工具函数 ======================
-def get_bj_time():
-    """返回北京时间字符串"""
-    return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
-
-
-def send_tg_notification(message, photo_path=None):
-    """发送 Telegram 通知，可附带截图"""
-    if not TG_BOT_TOKEN or not TG_CHAT_ID:
-        print("[WARN] 未配置 TG 信息，跳过发送")
-        return
+def take_screenshot(sb, account_index, step_name):
+    file_path = os.path.join(SCREENSHOT_DIR, f"acc{account_index}_{step_name}.png")
     try:
-        if photo_path and os.path.exists(photo_path):
-            url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
-            with open(photo_path, 'rb') as f:
-                files = {'photo': f}
-                data = {'chat_id': TG_CHAT_ID, 'caption': message, 'parse_mode': 'Markdown'}
-                requests.post(url, files=files, data=data, timeout=30)
-        else:
-            url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-            payload = {"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-            requests.post(url, json=payload, timeout=10)
-        print("[INFO] 📡 TG 通知已发送")
-    except Exception as e:
-        print(f"[ERROR] TG 发送失败: {e}")
+        sb.save_screenshot(file_path)
+        print(f"    ↳ 📸 截图: {os.path.basename(file_path)}")
+    except Exception:
+        pass
 
-
-def take_screenshot(driver, name):
-    """截图并返回文件路径"""
-    timestamp = datetime.now().strftime('%H%M%S')
-    filename = f"{SCREENSHOT_DIR}/{timestamp}-{name}.png"
+# =========================================================
+# Cloudflare 验证处理（保持原样）
+# =========================================================
+def is_cloudflare_interstitial(sb) -> bool:
     try:
-        driver.save_screenshot(filename)
-        print(f"[INFO] 📸 截图 → {filename}")
-    except Exception as e:
-        print(f"[WARN] 截图失败: {e}")
-    return filename
-
-
-def wait_for_turnstile_token(driver, timeout=90):
-    """等待 Cloudflare Turnstile token 生成"""
-    print("[INFO] ⏳ 等待 Turnstile 验证通过...")
-    start = time.time()
-    while time.time() - start < timeout:
-        token = driver.execute_script(
-            'return document.querySelector("[name=cf-turnstile-response]")?.value'
-        )
-        if token and len(token) > 20:
-            print("[INFO] ✅ Turnstile token 已生成")
+        page_source = sb.get_page_source()
+        title = sb.get_title().lower() if sb.get_title() else ""
+        indicators = ["Just a moment", "Verify you are human", "Checking your browser"]
+        for ind in indicators:
+            if ind in page_source:
+                return True
+        if "just a moment" in title or "attention required" in title:
             return True
-        time.sleep(1)
+        body_len = sb.execute_script('(function() { return document.body ? document.body.innerText.length : 0; })();')
+        if body_len is not None and body_len < 200 and "challenges.cloudflare.com" in page_source:
+            return True
+        return False
+    except:
+        return False
+
+def bypass_cloudflare_interstitial(sb, max_attempts=3) -> bool:
+    print("    🛡️ 检测到 CF 5秒盾，准备破除...")
+    for attempt in range(max_attempts):
+        print(f"      ▶ 尝试绕过 ({attempt+1}/{max_attempts})...")
+        try:
+            sb.uc_gui_click_captcha()
+            time.sleep(6)
+            if not is_cloudflare_interstitial(sb):
+                print("      ✅ CF 5秒盾已通过！")
+                return True
+        except Exception:
+            pass
+        time.sleep(3)
     return False
 
-
-def wait_for_url_contains(driver, keyword, timeout=45):
-    """等待当前 URL 包含特定关键字"""
-    start = time.time()
-    while time.time() - start < timeout:
-        if keyword in driver.current_url:
-            return True
-        time.sleep(0.5)
-    return False
-
-
-def check_login_error(driver):
-    """检查页面是否有登录错误信息"""
+def handle_turnstile_verification(sb) -> bool:
     try:
-        error_selectors = [
-            ".text-red-500", ".alert-danger", "[role='alert']", ".error", ".invalid-feedback"
-        ]
-        for sel in error_selectors:
-            elem = driver.find_element(sel, by="css selector")
-            if elem and elem.is_displayed() and elem.text.strip():
-                return elem.text.strip()
+        cookie_btn = 'button[data-cky-tag="accept-button"]'
+        if sb.is_element_visible(cookie_btn):
+            sb.click(cookie_btn)
+            time.sleep(1)
     except:
         pass
-    return None
 
-
-def mask_email(email):
-    """邮箱脱敏显示"""
-    if '@' in email:
-        local, domain = email.split('@', 1)
-        return f"{local[:3]}***@{domain}"
-    return f"{email[:3]}***"
-
-
-def parse_due_date(text):
-    """将页面显示的日期字符串转换为 YYYY-MM-DD 格式"""
-    if not text:
-        return None
-    # 格式: "28 Apr 2026"
-    match = re.search(r'(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})', text)
-    if match:
-        day, month_str, year = match.groups()
-        try:
-            dt = datetime.strptime(f"{day} {month_str} {year}", "%d %b %Y")
-            return dt.strftime("%Y-%m-%d")
-        except:
-            pass
-    # 已经是标准格式
-    if re.match(r'\d{4}-\d{2}-\d{2}', text):
-        return text
-    return None
-
-
-def get_current_due_date(driver):
-    """获取当前管理页面的到期时间，返回原始字符串和标准化日期"""
-    try:
-        due_elem = driver.find_element(
-            "xpath", "//h6[contains(text(),'Due date')]/following-sibling::div"
-        )
-        raw = due_elem.text.strip()
-        std = parse_due_date(raw)
-        return raw, std
-    except:
-        return "N/A", None
-
-
-# ====================== 主逻辑 ======================
-def main():
-    print("[INFO] " + "=" * 50)
-    print("[INFO] HidenCloud 自动续期脚本 (SeleniumBase)")
-    print("[INFO] " + "=" * 50)
-    print(f"[INFO] 📂 状态目录: {USER_DATA_DIR}")
-    print(f"[INFO] 📸 截图目录: {SCREENSHOT_DIR}")
-
-    # ---------- 浏览器驱动配置 ----------
-    driver_kwargs = {
-        "headless": True,
-        "headless2": True,
-        "uc": True,
-        "user_data_dir": USER_DATA_DIR,
-        "window_size": "1280,753",
-        "disable_csp": True,
-        "agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
-    }
-    if PROXY_SERVER:
-        driver_kwargs["proxy"] = PROXY_SERVER
-        print(f"[INFO] 🌐 使用代理: {PROXY_SERVER}")
-
-    driver = Driver(**driver_kwargs)
-    driver.set_page_load_timeout(60)
-    driver.set_script_timeout(60)
-
-    try:
-        driver.get("about:blank")
-    except Exception as e:
-        print(f"[WARN] 访问 about:blank 失败（可忽略）: {e}")
-
+    sb.execute_script('''
+        try {
+            var t = document.querySelector('.cf-turnstile') || document.querySelector('iframe[src*="turnstile"]');
+            if (t) t.scrollIntoView({behavior:'smooth', block:'center'});
+        } catch(e) {}
+    ''')
     time.sleep(2)
 
-    final_screenshot = None
-    result_status = "❌ 续订失败"
-    due_date_before_raw = "N/A"
-    due_date_before_std = None
-    due_date_after_raw = "N/A"
-    due_date_after_std = None
-    sid = None
+    has_turnstile = False
+    for _ in range(15):
+        if sb.is_element_present('iframe[src*="challenges.cloudflare"]') or sb.is_element_present('.cf-turnstile'):
+            has_turnstile = True
+            break
+        time.sleep(1)
 
-    try:
-        # ---------- 1. 访问主页 ----------
-        print(f"[INFO] 🌐 访问主页: {BASE_URL}/dashboard")
-        driver.get(f"{BASE_URL}/dashboard")
-        time.sleep(3)
-        take_screenshot(driver, "01-initial")
+    if not has_turnstile:
+        print("    🟢 无感验证通过")
+        return True
 
-        # ---------- 2. 登录判断 ----------
-        if "/auth/login" in driver.current_url or driver.is_element_visible("input#username"):
-            print("[INFO] 🔒 检测到未登录，开始登录流程")
-            take_screenshot(driver, "02-login-page")
-
-            masked_email = mask_email(HIDEN_EMAIL)
-            print(f"[INFO] ✍️ 填写邮箱: {masked_email}")
-            driver.type("input#username", HIDEN_EMAIL)
-            driver.type("input#password", HIDEN_PWD)
-            take_screenshot(driver, "03-credentials-filled")
-
-            print("[INFO] ⏳ 等待 Turnstile 加载...")
-            time.sleep(5)
-
-            if driver.is_element_present(".cf-turnstile"):
-                print("[INFO] 🖱️ 尝试点击 Turnstile...")
-                try:
-                    driver.uc_gui_click_cf(".cf-turnstile")
-                except:
-                    driver.click(".cf-turnstile")
-                take_screenshot(driver, "04-turnstile-clicked")
-
-                if not wait_for_turnstile_token(driver, timeout=90):
-                    take_screenshot(driver, "ERROR-turnstile-timeout")
-                    raise Exception("Turnstile 验证超时")
-                take_screenshot(driver, "05-token-ready")
-            else:
-                print("[WARN] 未找到 Turnstile 元素，继续提交...")
-
-            print("[INFO] 🚀 提交登录表单")
-            driver.click("button[type='submit']")
-            take_screenshot(driver, "06-login-submitted")
-
-            print("[INFO] ⏳ 等待登录跳转...")
-            if not wait_for_url_contains(driver, "/dashboard", timeout=45):
-                error_text = check_login_error(driver)
-                if error_text:
-                    print(f"[ERROR] 登录失败: {error_text}")
-                    take_screenshot(driver, "ERROR-login-failed-message")
-                    raise Exception(f"登录失败: {error_text}")
-                else:
-                    time.sleep(5)
-                    if "/dashboard" not in driver.current_url:
-                        take_screenshot(driver, "ERROR-login-stuck")
-                        raise Exception("登录后卡住，未跳转")
-
-            print("[INFO] ✅ 登录成功")
-            take_screenshot(driver, "07-login-success")
-        else:
-            print("[INFO] ✅ 已登录，跳过登录流程")
-            take_screenshot(driver, "02-already-logged-in")
-
-        # ---------- 3. 提取服务器 ID ----------
-        print("[INFO] 🔍 提取服务器 ID...")
-        take_screenshot(driver, "08-dashboard")
-        time.sleep(3)
-
+    print("    🧩 发现验证码，执行拟人点击...")
+    verified = False
+    for attempt in range(1, 4):
         try:
-            element = driver.find_element("xpath", "//span[contains(text(),'Free Server #')]")
-            text = element.text.strip()
-            print("[INFO] 找到服务器文本: Free Server #***")
-            match = re.search(r'Free Server #(\d+)', text)
-            if match:
-                sid = match.group(1)
-                print("[INFO] ✅ 提取到服务器 ID: ***")
-        except Exception as e:
-            print(f"[ERROR] 页面元素定位失败: {e}")
-
-        if not sid:
-            take_screenshot(driver, "ERROR-no-server-id")
-            raise Exception("无法提取服务器 ID")
-
-        manage_url = f"{BASE_URL}/service/{sid}/manage"
-        print(f"[INFO] 🚀 访问管理页面: {BASE_URL}/service/***/manage")
-        driver.get(manage_url)
-        time.sleep(3)
-        take_screenshot(driver, "09-manage-page")
-
-        # ---------- 4. 获取续订前到期时间 ----------
-        due_date_before_raw, due_date_before_std = get_current_due_date(driver)
-        print(f"[INFO] 续订前到期时间: {due_date_before_raw}")
-
-        # ---------- 5. 续期操作 ----------
-        renew_executed = False
-        restricted = False
-        days_left = None
-        threshold = None
-
-        try:
-            print("[INFO] 🔄 查找并点击 Renew 按钮...")
-
-            # 定位 Renew 按钮
-            renew_btn = None
-            selectors = [
-                ("css selector", "button[onclick*='showRenewAlert']"),
-                ("xpath", "//button[.//i[contains(@class, 'bx-recycle')]]"),
-                ("xpath", "//button[contains(text(),'Renew')]"),
-            ]
-            for by, value in selectors:
-                try:
-                    renew_btn = driver.find_element(by, value)
-                    if renew_btn.is_displayed():
-                        break
-                except:
-                    continue
-
-            if not renew_btn:
-                take_screenshot(driver, "ERROR-renew-button-not-found")
-                raise Exception("页面上未找到 Renew 按钮")
-
-            # 提取 onclick 属性
-            onclick_val = renew_btn.get_attribute("onclick") or ""
-            print(f"[INFO] Renew 按钮 onclick: {onclick_val}")
-
-            param_match = re.search(
-                r'showRenewAlert\((\d+),\s*(\d+),\s*(true|false)\)', onclick_val
-            )
-            if param_match:
-                days_left = int(param_match.group(1))
-                threshold = int(param_match.group(2))
-                is_free = param_match.group(3) == "true"
-                print(f"[INFO] 到期剩余: {days_left} 天, 续期阈值: ≤{threshold} 天, 免费服务: {is_free}")
-
-            # 点击 Renew 按钮
-            renew_btn.click()
-            renew_executed = True
-            print("[INFO] ✅ Renew 按钮已点击")
-            time.sleep(3)
-            take_screenshot(driver, "10-renew-clicked")
-
+            sb.uc_gui_click_captcha()
+        except:
+            pass
+        for _ in range(10):
+            if sb.is_element_present('input[name="cf-turnstile-response"]'):
+                token = sb.get_attribute('input[name="cf-turnstile-response"]', 'value')
+                if token and len(token) > 20:
+                    print("      ✅ 验证成功获取 Token！")
+                    verified = True
+                    break
             time.sleep(1)
+        if verified:
+            break
 
-            # 检测限制弹窗
-            restriction_h3 = driver.execute_script(
-                "var el = document.querySelector('.fixed.inset-0 h3');"
-                "return el ? el.textContent.trim() : '';"
-            )
-            if 'Renewal Restricted' in restriction_h3:
-                restricted = True
-                alert_text = driver.execute_script(
-                    "var el = document.querySelector('.fixed.inset-0 p');"
-                    "return el ? el.textContent.trim() : '';"
-                )
-                print(f"[INFO] ⚠️ 触发限制弹窗: {alert_text}")
-                take_screenshot(driver, "11-renewal-restricted-popup")
+    if not verified:
+        print("    ❌ 验证失败。")
+        return False
+    return True
 
-                try:
-                    ok_btn = driver.find_element("xpath", "//button[contains(text(),'OK')]")
-                    ok_btn.click()
-                    time.sleep(1)
-                    print("[INFO] 已关闭限制弹窗")
-                except:
-                    pass
-            else:
-                # 正常续期流程
-                print("[INFO] 📦 等待续期模态框...")
-                modal_selector = f"div#renewService-{sid}"
-                driver.wait_for_element_visible(modal_selector, timeout=10)
-                take_screenshot(driver, "11-renew-modal-opened")
+# =========================================================
+# 单个账号处理（原样保留）
+# =========================================================
+def process_account(account_index, username, password):
+    earliest_date_for_account = None 
 
-                print("[INFO] 📦 点击 Create Invoice...")
-                submit_btn = driver.find_element(by="css selector", value=f"{modal_selector} button[type='submit']")
-                submit_btn.click()
-                time.sleep(3)
-                take_screenshot(driver, "12-invoice-created")
+    with SB(uc=True, test=True, locale="en", chromium_arg="--disable-blink-features=AutomationControlled") as sb:
+        print(f"  [1/4] 🌐 访问 HidenCloud 登录页...")
+        sb.uc_open_with_reconnect("https://dash.hidencloud.com/dashboard", reconnect_time=8)
+        time.sleep(4)
+        take_screenshot(sb, account_index, "01_访问初始页")
+        
+        if is_cloudflare_interstitial(sb):
+            if not bypass_cloudflare_interstitial(sb):
+                print(f"  ❌ 终止测试：无法绕过 CF 整页拦截。")
+                take_screenshot(sb, account_index, "01-1_整页拦截失败")
+                return None
 
-                print("[INFO] 💳 等待支付页面...")
-                time.sleep(5)
-                take_screenshot(driver, "13-invoice-page")
-
-                # 滚动到底部
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(1)
-                take_screenshot(driver, "14-scrolled-to-bottom")
-
-                print("[INFO] ✅ Pay 按钮已点击")
-                pay_clicked = driver.execute_script("""
-                    var btn = document.querySelector('button[type="submit"]');
-                    if(btn && btn.innerText.includes('Pay')) {
-                        btn.click();
-                        return true;
-                    }
-                    return false;
-                """)
-
-                if pay_clicked:
-                    print("[INFO] ⏳ 等待支付完成...")
-                    time.sleep(5)
-                    take_screenshot(driver, "15-pay-clicked")
-                else:
-                    print("[WARN] 未找到 Pay 按钮，可能免费服务自动完成")
-                    take_screenshot(driver, "15-no-pay-button")
-
+        print(f"  [2/4] 🔑 填写账号与密码...")
+        try:
+            sb.wait_for_element_visible('input[type="email"], input[type="text"]', timeout=10)
+            sb.type('input[type="email"], input[type="text"]', username)
+            sb.type('input[type="password"]', password)
+            take_screenshot(sb, account_index, "02_表单填写")
         except Exception as e:
-            print(f"[ERROR] ❌ 续期过程出错: {e}")
-            take_screenshot(driver, "ERROR-renew-process")
-            raise e
+            print(f"  ❌ 填写表单失败: {e}")
+            take_screenshot(sb, account_index, "02_报错")
+            return None
 
-        # ---------- 6. 获取续订后到期时间 ----------
-        driver.get(manage_url)
-        time.sleep(3)
-        due_date_after_raw, due_date_after_std = get_current_due_date(driver)
-        print(f"[INFO] 续订后到期时间: {due_date_after_raw}")
-        final_screenshot = take_screenshot(driver, "16-final-due-date")
+        handle_turnstile_verification(sb)
+        
+        try:
+            sb.click('button[type="submit"]')
+        except:
+            sb.execute_script('(function() { document.querySelector("form").submit(); })();')
 
-        # ===== 【关键修改】保证输出标准格式或 UNKNOWN =====
-        if due_date_after_std:
-            print(f"到期时间(标准): {due_date_after_std}")
-        else:
-            print("到期时间(标准): UNKNOWN")
-        # ===== 结束修改 =====
+        time.sleep(6) 
+        take_screenshot(sb, account_index, "04_提交登录后")
 
-        # ---------- 7. 判断结果状态 ----------
-        if restricted and not renew_executed:
-            result_status = "ℹ️ 暂无可续期"
-        elif restricted and renew_executed:
-            result_status = "ℹ️ 暂无可续期"
-        elif due_date_before_std and due_date_after_std:
-            if due_date_after_std > due_date_before_std:
-                result_status = "✅ 续订成功"
+        print(f"  [3/4] 📂 获取服务器列表与解析信息...")
+        sb.open("https://dash.hidencloud.com/dashboard")
+        time.sleep(5)
+        take_screenshot(sb, account_index, "05_面板主页")
+
+        print(f"  [4/4] 🔄 智能解析并执行续期逻辑...")
+        try:
+            rows_selector = "tr[data-accordion-target]"
+            if sb.is_element_visible(rows_selector):
+                elements = sb.find_elements(rows_selector)
+                print(f"    📊 发现 {len(elements)} 台服务器，开始解析状态：")
+
+                for i in range(len(elements)):
+                    row = sb.find_elements(rows_selector)[i]
+                    row_text = row.text 
+                    
+                    sid_match = re.search(r'#(\d+)', row_text)
+                    date_match = re.search(r'(\d{2}\s+[A-Za-z]{3}\s+\d{4})', row_text)
+                    status_match = re.search(r'(Active|Pending|Suspended)', row_text, re.IGNORECASE)
+
+                    if sid_match and date_match and status_match:
+                        sid = sid_match.group(1)
+                        due_date_str = date_match.group(1)
+                        status = status_match.group(1)
+                        
+                        due_date = datetime.strptime(due_date_str, "%d %b %Y")
+                        now = datetime.utcnow()
+                        time_left = due_date - now
+                        hours_left = time_left.total_seconds() / 3600
+                        
+                        if not earliest_date_for_account or due_date < earliest_date_for_account:
+                            earliest_date_for_account = due_date
+
+                        print(f"    ------------------------------------")
+                        print(f"    📦 服务器 ID: {sid}")
+                        print(f"    📌 当前状态 : {status}")
+                        print(f"    📅 到期时间 : {due_date_str} (剩余 {hours_left:.1f} 小时)")
+
+                        if hours_left <= 20:
+                            print(f"      ⚠️ 触发续期：距离到期不足 20 小时！")
+                            manage_url = f"https://dash.hidencloud.com/service/{sid}/manage"
+                            sb.open(manage_url)
+                            time.sleep(5)
+                            take_screenshot(sb, account_index, f"06_ID_{sid}_管理页")
+                            
+                            renew_btn_selector = "button[data-modal-target^='renewService-']"
+                            
+                            if sb.is_element_visible(renew_btn_selector):
+                                print(f"      🖱️ 1. 成功找到 [Renew] 续期按钮，准备点击...")
+                                sb.click(renew_btn_selector)
+                                time.sleep(3)
+                                take_screenshot(sb, account_index, f"07_ID_{sid}_唤出弹窗")
+                                handle_turnstile_verification(sb)
+                                
+                                create_invoice_btn = f"#renewService-{sid} button[type='submit']"
+                                try:
+                                    sb.wait_for_element_visible(create_invoice_btn, timeout=10)
+                                except:
+                                    print(f"      ❌ 找不到 Create Invoice 按钮")
+                                    take_screenshot(sb, account_index, f"07_ID_{sid}_找不到按钮")
+                                    sb.open("https://dash.hidencloud.com/dashboard")
+                                    time.sleep(5)
+                                    continue
+                                
+                                sb.uc_click(create_invoice_btn)
+                                time.sleep(2)
+                                take_screenshot(sb, account_index, f"07_01_ID_{sid}_UC点击后2秒")
+                                
+                                pay_btn_selector = "button[type='submit']"
+                                try:
+                                    sb.wait_for_element_visible(pay_btn_selector, timeout=20)
+                                    take_screenshot(sb, account_index, f"08_ID_{sid}_支付确认页")
+                                    sb.click(pay_btn_selector)
+                                    time.sleep(5)
+                                    take_screenshot(sb, account_index, f"09_ID_{sid}_支付完成")
+                                    print(f"      ✨ 服务器 {sid} 续期并支付完成！")
+                                    
+                                    sb.open("https://dash.hidencloud.com/dashboard")
+                                    time.sleep(5)
+                                    take_screenshot(sb, account_index, f"10_ID_{sid}_续期后仪表盘")
+                                    
+                                    if sb.is_element_visible(rows_selector):
+                                        new_elements = sb.find_elements(rows_selector)
+                                        new_earliest = None
+                                        for idx in range(len(new_elements)):
+                                            row = sb.find_elements(rows_selector)[idx]
+                                            row_text = row.text
+                                            sid_m = re.search(r'#(\d+)', row_text)
+                                            date_m = re.search(r'(\d{2}\s+[A-Za-z]{3}\s+\d{4})', row_text)
+                                            if sid_m and date_m:
+                                                new_due_date = datetime.strptime(date_m.group(1), "%d %b %Y")
+                                                if not new_earliest or new_due_date < new_earliest:
+                                                    new_earliest = new_due_date
+                                        if new_earliest:
+                                            earliest_date_for_account = new_earliest
+                                            print(f"    🎯 更新账号最早到期时间为: {earliest_date_for_account.strftime('%d %b %Y')}")
+                                    break
+                                except Exception:
+                                    current_url = sb.get_current_url()
+                                    if "invoice" in current_url.lower() or "payment" in current_url.lower():
+                                        print(f"      ⚠️ 页面已跳转但未定位到 Pay 按钮，URL: {current_url}")
+                                    else:
+                                        print(f"      ❌ 未跳转到支付页，停留在: {current_url}")
+                            else:
+                                print(f"      ℹ️ 管理页未找到续期按钮。请检查截图。")
+                            sb.open("https://dash.hidencloud.com/dashboard")
+                            time.sleep(5)
+                        else:
+                            print(f"      🟢 判定结果：时间充足，本次跳过续期。")
+                    else:
+                        print(f"    ⚠️ 无法完整解析该行数据。")
             else:
-                result_status = "❌ 续订失败"
-        elif renew_executed and not restricted:
-            result_status = "⚠️ 续期已执行，请确认"
-        else:
-            result_status = "❌ 续订失败"
+                print(f"    ℹ️ 未发现任何服务器实例。")
+        except Exception as e:
+            print(f"  ❌ 操作过程中发生错误: {e}")
+            take_screenshot(sb, account_index, "99_操作报错")
 
-        # ---------- 8. 发送 TG 通知 ----------
-        bj_time = get_bj_time()
-        change_info = ""
-        if due_date_before_raw != "N/A" and due_date_after_raw != "N/A":
-            if due_date_before_raw == due_date_after_raw:
-                change_info = due_date_after_raw
-            else:
-                change_info = f"{due_date_before_raw} → {due_date_after_raw}"
-        else:
-            change_info = due_date_after_raw
+        print(f"  🎉 账号 {account_index} 测试完成！")
+        return earliest_date_for_account
 
-        extra_info = ""
-        if restricted and days_left is not None and threshold is not None:
-            extra_info = f"\n剩余: {days_left} 天 (需 ≤{threshold} 天可续)"
+# =========================================================
+# 程序入口点
+# =========================================================
+def main():
+    accounts_str = os.environ.get("TEST_ACCOUNTS", "你的邮箱@outlook.com:你的密码")
+    if not accounts_str:
+        return
+    
+    account_list = [pair.split(':', 1) for pair in accounts_str.split(',') if ':' in pair]
+    print(f"\n✅ 初始化成功，开始执行任务...\n")
 
-        tg_caption = (
-            f"{result_status}\n\n"
-            f"账号: `{HIDEN_EMAIL}`\n"
-            f"服务器: `Free Server #{sid}`\n"
-            f"到期: {change_info}{extra_info}\n"
-            f"时间: {bj_time}\n\n"
-            f"HidenCloud Auto Renew"
-        )
-        send_tg_notification(tg_caption, photo_path=final_screenshot)
+    global_earliest_date = None 
 
-        print(f"[INFO] 🎉 任务完成 — {result_status}")
+    for index, (username, password) in enumerate(account_list, 1):
+        username, password = username.strip(), password.strip()
+        print("=" * 50)
+        print(f"▶ 正在测试账号 [{index}/{len(account_list)}]: {username}")
+        print("=" * 50)
+        try:
+            acc_earliest_date = process_account(index, username, password)
+            if acc_earliest_date:
+                if not global_earliest_date or acc_earliest_date < global_earliest_date:
+                    global_earliest_date = acc_earliest_date
+        except Exception as e:
+            print(f"❌ 崩溃异常: {e}")
+        time.sleep(5)
 
-    except Exception as e:
-        print(f"[ERROR] ❌ 脚本执行失败: {e}")
-        take_screenshot(driver, "CRITICAL-ERROR")
-        send_tg_notification(f"❌ HidenCloud 续期失败\n错误: {str(e)[:100]}")
-        raise
-    finally:
-        driver.quit()
-
+    # ====== 新增：计算下次 cron 并输出给 Actions ======
+    print("\n" + "=" * 50)
+    print("⚙️ 计算下次调度时间...")
+    if global_earliest_date:
+        now = datetime.utcnow()
+        time_left = global_earliest_date - now
+        hours_left = time_left.total_seconds() / 3600
+        run_in_hours = hours_left - 20
+        if run_in_hours <= 0:
+            run_in_hours = 4  # 保底
+        next_run = now + timedelta(hours=run_in_hours)
+        new_cron = f"{next_run.minute} {next_run.hour} {next_run.day} {next_run.month} *"
+        print(f"  ⏰ 最早到期: {global_earliest_date.strftime('%Y-%m-%d %H:%M')} UTC")
+        print(f"  📅 下次运行: {next_run.strftime('%Y-%m-%d %H:%M')} UTC")
+    else:
+        new_cron = "0 0 * * *"
+        print("  ⚠️ 无服务器日期，回退每天 0 点运行")
+    
+    # 关键：输出特殊标记行，供 YAML 捕获
+    print(f"NEXT_CRON={new_cron}")
+    print("=" * 50)
 
 if __name__ == "__main__":
     main()
