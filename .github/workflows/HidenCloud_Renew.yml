@@ -1,134 +1,61 @@
 name: HidenCloud 核心自动续期
 
 on:
-  workflow_dispatch:  # 允许在 GitHub 网页上手动点击 "Run workflow" 触发测试
+  workflow_dispatch:
   schedule:
-    # 定时任务：保底策略改为每天运行一次 (UTC 00:00)
-    # 如果配置了 REPO_TOKEN，Python 脚本会在运行后自动改写这个时间
-    - cron: '0 0 * * *'   
+    - cron: '0 0 * * *'
 
 permissions:
-  # 【修复】：因为 Python 脚本需要改写这个 yml 文件本身并 Push
-  # 必须将 contents 的权限提升为 write
-  contents: write     
-  actions: write
+  contents: write      # 允许 git push
+  actions: write       # 如果以后要用到 actions 相关 API
 
 jobs:
   renew-job:
     runs-on: ubuntu-latest
     steps:
-      - name: 步骤 1：拉取仓库代码
+      - name: 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: 步骤 2：设置 Python 环境
+      - name: 设置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 步骤 3：安装必要的反检测与浏览器依赖包
+      - name: 安装依赖
         run: pip install --quiet seleniumbase playwright-stealth
 
-      - name: 步骤 4：运行多账号续期 Python 脚本
+      - name: 运行续期脚本
         env:
           TEST_ACCOUNTS: ${{ secrets.HIDENCLOUD }}
-          # 【核心修复】：必须将你设置的 Token 暴露给 Python 脚本，否则它无法识别
-          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
         run: python3 -u main.py 2>&1 | tee renew.log
 
-      - name: 提取到期时间
-        id: extract_due
-        if: success()
+      # ----- 新增步骤：从日志中提取 NEXT_CRON 并更新 workflow -----
+      - name: 更新工作流定时 cron 并推送
+        if: always()    # 即使续期步骤失败也尝试更新（确保时间能修正）
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
         run: |
-          DUE_DATE=$(grep -oP '到期时间\(标准\): \K\d{4}-\d{2}-\d{2}' renew.log | tail -1 || echo "")
-          # ---------- 新增：识别 UNKNOWN 标记 ----------
-          if [ -z "$DUE_DATE" ]; then
-            UNKNOWN_CHECK=$(grep -oP '到期时间\(标准\): \KUNKNOWN' renew.log | tail -1 || echo "")
-            if [ "$UNKNOWN_CHECK" = "UNKNOWN" ]; then
-              echo "skip_update=true" >> $GITHUB_OUTPUT
-              echo "::warning::脚本无法解析到期日期，跳过 Cron 更新"
-              exit 0
-            fi
-          fi
-          # ---------- 结束新增 ----------
-          if [ -z "$DUE_DATE" ]; then
-            echo "skip_update=true" >> $GITHUB_OUTPUT
-            echo "::warning::未能提取到期时间，跳过 Cron 更新"
-            exit 0
-          fi
-          echo "due_date=$DUE_DATE" >> $GITHUB_OUTPUT
-          echo "skip_update=false" >> $GITHUB_OUTPUT
-          echo "::notice::📅 当前到期时间: $DUE_DATE"
+          # 1. 提取 Python 输出的 NEXT_CRON 值
+          NEXT_CRON=$(grep -oP 'NEXT_CRON=\K.*' renew.log || echo "0 0 * * *")
+          echo ">> 提取到新 cron: $NEXT_CRON"
 
-      - name: 修改下次 Cron 时间
-        if: success() && steps.extract_due.outputs.skip_update != 'true'
-        run: |
-          set -e
+          # 2. 修改 workflow 文件中的 cron 字段
+          sed -i "s|cron: '.*'|cron: '$NEXT_CRON'|" .github/workflows/HidenCloud_Renew.yml
 
-          DUE_DATE="${{ steps.extract_due.outputs.due_date }}"
-          echo "📅 当前到期时间: $DUE_DATE"
-
-          CURRENT_EPOCH=$(date -u +%s)
-          DUE_EPOCH=$(date -u -d "$DUE_DATE 00:00:00" +%s)
-          REMAINING_SECONDS=$((DUE_EPOCH - CURRENT_EPOCH))
-
-          REMAINING_HOURS_DISPLAY=$(echo "scale=2; $REMAINING_SECONDS / 3600" | bc)
-          echo "⏳ 距离到期还有 $REMAINING_HOURS_DISPLAY 小时"
-
-          REMAINING_HOURS_INT=$((REMAINING_SECONDS / 3600))
-
-          if [ "$REMAINING_HOURS_INT" -gt 20 ]; then
-            HOURS_UNTIL_NEXT_RUN=$((REMAINING_HOURS_INT - 20))
-          else
-            HOURS_UNTIL_NEXT_RUN=4
-            echo "::warning::剩余时间不足 20 小时，4 小时后重试"
-          fi
-
-          NEXT_DATE=$(date -u -d "+${HOURS_UNTIL_NEXT_RUN} hours" +"%Y-%m-%d %H:%M")
-          NEXT_MINUTE=$(date -u -d "+${HOURS_UNTIL_NEXT_RUN} hours" +"%-M")
-          NEXT_HOUR=$(date -u -d "+${HOURS_UNTIL_NEXT_RUN} hours" +"%-H")
-          NEXT_DAY=$(date -u -d "+${HOURS_UNTIL_NEXT_RUN} hours" +"%-d")
-          NEXT_MONTH=$(date -u -d "+${HOURS_UNTIL_NEXT_RUN} hours" +"%-m")
-
-          NEW_CRON="$NEXT_MINUTE $NEXT_HOUR $NEXT_DAY $NEXT_MONTH *"
-
-          echo "::notice::⏰ 下次运行: $NEXT_DATE UTC"
-          echo "::notice::📟 新 Cron: $NEW_CRON"
-
-          git clone https://x-access-token:${{ secrets.REPO_TOKEN }}@github.com/${{ github.repository }}.git workflow_repo
-          cd workflow_repo
-
-          WORKFLOW_FILE=".github/workflows/HidenCloud_Renew.yml"
-
-          LINE_NUM=$(grep -n "cron: '" "$WORKFLOW_FILE" | head -n1 | cut -d: -f1)
-
-          if [ -z "$LINE_NUM" ]; then
-            echo "::error::找不到 cron 行"
-            exit 1
-          fi
-
-          echo "::notice::更新第 $LINE_NUM 行"
-
-          sed -i "${LINE_NUM}c\\    - cron: '$NEW_CRON'   # 自动更新下次运行时间" "$WORKFLOW_FILE"
-
-          if git diff --quiet "$WORKFLOW_FILE"; then
-            echo "::notice::没有变化需要提交"
-            exit 0
-          fi
-
+          # 3. 配置 git 身份（避免未知作者）
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$WORKFLOW_FILE"
-          git commit -m "🔄 自动更新 HidenCloud 续期 Cron" \
-                     -m "下次运行: $NEXT_DATE UTC" \
-                     -m "Cron: $NEW_CRON" \
-                     -m "到期时间: $DUE_DATE"
-          git push
 
-          echo "::notice::✅ Cron 更新成功"
+          # 4. 设置带 token 的远程推送地址
+          git remote set-url origin https://x-access-token:${REPO_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
 
+          # 5. 提交并推送
+          git add .github/workflows/HidenCloud_Renew.yml
+          git commit -m "🔄 自动更新下次调度 cron 为 $NEXT_CRON [skip ci]" || echo "没有变更，跳过提交"
+          git push origin HEAD:main || echo "❌ 推送失败，请检查 REPO_TOKEN 权限"
 
-      - name: 步骤 5：打包输出所有的截图和日志
-        if: always()   
+      - name: 保存截图和日志
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: 运行截图与日志-${{ github.run_id }}
